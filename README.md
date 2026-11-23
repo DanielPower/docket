@@ -10,7 +10,13 @@ A car repair bill is `Invoice` + `Related asset → 2019 Civic` + `Vehicle servi
 
 ## How ingestion works
 
-1. **Upload** through the web UI (drag files anywhere), or drop files into the consume folder.
+1. **Upload** through the web UI (drag files anywhere), send scans to Docket's built-in FTP server, or drop files into the consume folder.
+
+   **Scan to FTP** is the fastest and safest way to get scans in: Docket knows a scan is complete when the scanner closes the transfer, and the scanner only hears "done" once the document is in the inbox, so a failure shows on the scanner. Set `FTP_USER` and `FTP_PASSWORD`, publish the FTP port and the passive port range, set `FTP_PASV_ADDRESS` to the Docker host's LAN IP, and point the scanner's FTP profile at it (passive mode, any folder). Nothing is stored as files: folders are accepted but ignored, and listings are empty. There's no TLS, so keep it on the home network.
+
+   **The consume folder** is scanned every second. A file is taken once its size stops changing and, for PDF, JPEG and PNG, once its end marker has been written, so a scanner that pauses mid-file isn't ingested half-written. On a network share mounted with NFS, add `actimeo=1` to the mount options so new files aren't hidden by NFS caching.
+
+   The inbox updates live: new documents and status changes are pushed to the browser as they happen.
 2. **OCR**: [OCRmyPDF](https://ocrmypdf.readthedocs.io/) + Tesseract add a text layer to scanned pages (pages that already have text are left as they are) and produce a searchable PDF. Text is indexed in Postgres full-text search.
 3. **AI proposal**: Claude reads the text (and the PDF itself for short documents), the component catalog, your existing objects, and a few similar documents you've already filed. It proposes:
    - a title and date
@@ -93,6 +99,10 @@ create database docket owner docket;
 | `OCR_LANGUAGES` | `eng` | Tesseract languages |
 | `WORKER_CONCURRENCY` | `2` | Documents processed in parallel |
 | `DATA_DIR` / `CONSUME_DIR` | `/data` / `/consume` | Storage and drop folder |
+| `FTP_USER` / `FTP_PASSWORD` | — | Turn on the built-in FTP server for scanners |
+| `FTP_PORT` | `2121` | FTP control port (the container doesn't run as root, so not 21; publish it as `21:2121` if the scanner needs 21) |
+| `FTP_PASV_ADDRESS` | the address the scanner connected to | Address given to scanners for passive transfers. Behind Docker's port mapping, set it to the host's LAN IP |
+| `FTP_PASV_PORTS` | `30000-30009` | Passive data ports; publish the same range |
 | `PUID` / `PGID` | `1000` | User and group the container runs as |
 | `AI_ASK_MAX_STEPS` | `8` | Most searches/reads the Ask assistant makes for one question |
 | `EMBEDDING_URL` | — | OpenAI-compatible embeddings API, e.g. `http://llama-swap:8080/v1`. Enables semantic search (also needs pgvector) |

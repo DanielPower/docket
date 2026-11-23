@@ -10,7 +10,8 @@ import { HttpError } from "./errors.ts";
 import { migrate } from "./migrate.ts";
 import { apiRoutes } from "./routes/api.ts";
 import { eventRoutes } from "./routes/events.ts";
-import { startConsumeWatcher } from "./services/ingest.ts";
+import { ingestBuffer, startConsumeWatcher } from "./services/ingest.ts";
+import { startFtpServer } from "./services/ftp.ts";
 import { checkOcrTools } from "./services/ocr.ts";
 import { startSemantic } from "./services/embeddings.ts";
 import { startWorker } from "./worker.ts";
@@ -58,6 +59,20 @@ async function main() {
   }
 
   await app.listen({ port: config.port, host: config.host });
+
+  if (config.ftp.user && config.ftp.password) {
+    await startFtpServer({
+      ...config.ftp,
+      host: config.host,
+      maxBytes: 500 * 1024 * 1024,
+      log,
+      onFile: async (buf, name) => {
+        const r = await ingestBuffer(buf, name);
+        return r.duplicate ? `already had it (${r.id})` : r.id;
+      },
+    });
+    app.log.info(`FTP: receiving scans on port ${config.ftp.port}, passive ports ${config.ftp.pasvPorts.join("-")}`);
+  }
 }
 
 main().catch((err) => {
