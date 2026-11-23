@@ -102,21 +102,47 @@ export function InboxPage() {
     return res.items;
   }, []);
 
-  // Poll while something is being processed.
+  // Poll while something is being processed. A failed load (server restarting,
+  // phone waking up) is retried instead of ending the polling for good.
   useEffect(() => {
     let stop = false;
+    let failing = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      clearTimeout(timer);
+      let delay = 15000;
       try {
         const list = await loadList();
-        if (!stop) timer = setTimeout(tick, list.some((i) => ACTIVE.includes(i.status)) ? 2500 : 15000);
+        failing = false;
+        if (list.some((i) => ACTIVE.includes(i.status))) delay = 2500;
       } catch (e) {
-        toast((e as Error).message, "error");
+        // One toast per outage, not one per retry.
+        if (!failing) toast((e as Error).message, "error");
+        failing = true;
       }
+      if (!stop) timer = setTimeout(tick, delay);
     };
+    // Coming back to the tab or app: timers were paused or throttled, so look now.
+    const onVisible = () => { if (document.visibilityState === "visible") void tick(); };
     void tick();
-    return () => { stop = true; clearTimeout(timer); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { stop = true; clearTimeout(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [loadList, toast]);
+
+  // The status poll behind the nav badge sees new documents first (a scan in the
+  // consume folder, an upload from another device). When its counts change, the
+  // list reloads instead of waiting for the next idle poll.
+  const countsKey = status
+    ? ["inbox", "failed", ...ACTIVE].map((s) => status.counts[s] ?? 0).join(",") +
+      `/${Object.values(status.counts).reduce((a, b) => a + b, 0)}`
+    : null;
+  const seenCounts = useRef(countsKey);
+  useEffect(() => {
+    if (countsKey === null || countsKey === seenCounts.current) return;
+    const first = seenCounts.current === null;
+    seenCounts.current = countsKey;
+    if (!first) loadList().catch(() => {});
+  }, [countsKey, loadList]);
 
   // Closing the tab with unfiled edits asks first.
   useEffect(() => {

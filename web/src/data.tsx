@@ -44,9 +44,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refresh().catch((e) => toast(e.message, "error"));
-    // Keep the inbox badge fresh.
-    const t = setInterval(() => api.status().then(setStatus).catch(() => {}), 10_000);
-    return () => clearInterval(t);
+    // Keep the inbox badge fresh. The inbox list also reloads when these counts change.
+    const poll = () => api.status().then(setStatus).catch(() => {});
+    const t = setInterval(poll, 10_000);
+    // Background tabs and sleeping phones pause timers; look as soon as Docket is back in view.
+    const onVisible = () => { if (document.visibilityState === "visible") void poll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
   }, [refresh, toast]);
 
   return (
