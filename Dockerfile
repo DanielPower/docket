@@ -28,7 +28,7 @@ COPY server/src server/src
 COPY --from=build /app/web/dist web/dist
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 VOLUME ["/data", "/consume"]
-EXPOSE 8080
+EXPOSE 8080 2121 30000-30009
 # The entrypoint fixes ownership of /data and /consume, then drops to PUID:PGID (default 1000).
 ENTRYPOINT ["docker-entrypoint.sh"]
 # Node 24 runs the TypeScript sources directly (type stripping); there is no server build step.

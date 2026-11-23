@@ -7,6 +7,9 @@ services:
     env_file: .env
     ports:
       - "8080:8080"
+      # Scan to FTP (when FTP_USER and FTP_PASSWORD are set): control port and passive range.
+      # - "21:2121"
+      # - "30000-30009:30000-30009"
     volumes:
       # Originals, OCR'd PDFs and thumbnails. Back this up together with the database.
       - ./data:/data

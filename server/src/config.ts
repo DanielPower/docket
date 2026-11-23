@@ -19,6 +19,20 @@ export const config = {
   /** Run the processing worker inside the web server process. */
   runWorker: env("RUN_WORKER", "true") === "true",
   workerConcurrency: Number(env("WORKER_CONCURRENCY", "2")),
+  /**
+   * Built-in FTP server for scanners (scan to FTP). On when FTP_USER and
+   * FTP_PASSWORD are set. Port 2121 because the container doesn't run as root;
+   * publish it as 21 if the scanner can't use another port.
+   */
+  ftp: {
+    user: env("FTP_USER", ""),
+    password: env("FTP_PASSWORD", ""),
+    port: Number(env("FTP_PORT", "2121")),
+    /** The address scanners reach Docket at (the Docker host's LAN IP); needed for PASV behind Docker's port mapping. */
+    pasvAddress: env("FTP_PASV_ADDRESS", "") || undefined,
+    /** Passive data ports, "first-last"; publish the same range. */
+    pasvPorts: env("FTP_PASV_PORTS", "30000-30009").split("-").map(Number) as [number, number],
+  },
   ocr: {
     /** Tesseract language codes joined with "+", e.g. "eng+fra". */
     languages: env("OCR_LANGUAGES", "eng"),
