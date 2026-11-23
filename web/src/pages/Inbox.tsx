@@ -53,7 +53,7 @@ function changedPaths(before: Draft, after: Draft): Map<string, DraftValue> {
 export function InboxPage() {
   const { id: routeId } = useParams();
   const navigate = useNavigate();
-  const { catalog, objects, refresh, toast, status } = useAppData();
+  const { catalog, objects, refresh, toast, status, docsVersion, live } = useAppData();
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [draft, setDraftState] = useState<Draft | null>(null);
@@ -102,47 +102,30 @@ export function InboxPage() {
     return res.items;
   }, []);
 
-  // Poll while something is being processed. A failed load (server restarting,
-  // phone waking up) is retried instead of ending the polling for good.
+  // The server pushes an event when a document is consumed, processed or filed
+  // (see data.tsx); reload the list each time.
   useEffect(() => {
+    loadList().catch((e) => toast((e as Error).message, "error"));
+  }, [docsVersion, loadList, toast]);
+
+  // Fallback while the live stream is down (server restarting, a proxy that
+  // won't pass it): poll, quickly while something is being processed. A failed
+  // load is retried rather than ending the polling.
+  useEffect(() => {
+    if (live) return;
     let stop = false;
-    let failing = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
-      clearTimeout(timer);
       let delay = 15000;
       try {
         const list = await loadList();
-        failing = false;
         if (list.some((i) => ACTIVE.includes(i.status))) delay = 2500;
-      } catch (e) {
-        // One toast per outage, not one per retry.
-        if (!failing) toast((e as Error).message, "error");
-        failing = true;
-      }
+      } catch { /* the stream or the next tick will catch up */ }
       if (!stop) timer = setTimeout(tick, delay);
     };
-    // Coming back to the tab or app: timers were paused or throttled, so look now.
-    const onVisible = () => { if (document.visibilityState === "visible") void tick(); };
-    void tick();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { stop = true; clearTimeout(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [loadList, toast]);
-
-  // The status poll behind the nav badge sees new documents first (a scan in the
-  // consume folder, an upload from another device). When its counts change, the
-  // list reloads instead of waiting for the next idle poll.
-  const countsKey = status
-    ? ["inbox", "failed", ...ACTIVE].map((s) => status.counts[s] ?? 0).join(",") +
-      `/${Object.values(status.counts).reduce((a, b) => a + b, 0)}`
-    : null;
-  const seenCounts = useRef(countsKey);
-  useEffect(() => {
-    if (countsKey === null || countsKey === seenCounts.current) return;
-    const first = seenCounts.current === null;
-    seenCounts.current = countsKey;
-    if (!first) loadList().catch(() => {});
-  }, [countsKey, loadList]);
+    timer = setTimeout(tick, 2500);
+    return () => { stop = true; clearTimeout(timer); };
+  }, [live, loadList]);
 
   // Closing the tab with unfiled edits asks first.
   useEffect(() => {

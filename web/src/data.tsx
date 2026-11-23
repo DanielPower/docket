@@ -8,6 +8,10 @@ interface AppData {
   catalog: ComponentDef[];
   objects: ObjectSummary[];
   status: Status | null;
+  /** Goes up each time the server says documents arrived or changed status. */
+  docsVersion: number;
+  /** The live update stream is connected; pages can skip their own polling. */
+  live: boolean;
   refresh: () => Promise<void>;
   toast: (msg: string, kind?: "info" | "error", action?: ToastAction) => void;
 }
@@ -24,6 +28,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [catalog, setCatalog] = useState<ComponentDef[]>([]);
   const [objects, setObjects] = useState<ObjectSummary[]>([]);
   const [status, setStatus] = useState<Status | null>(null);
+  const [docsVersion, setDocsVersion] = useState(0);
+  const [live, setLive] = useState(false);
   const [toasts, setToasts] = useState<Array<{ id: number; msg: string; kind: string; action?: ToastAction }>>([]);
 
   const refresh = useCallback(async () => {
@@ -44,17 +50,42 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refresh().catch((e) => toast(e.message, "error"));
-    // Keep the inbox badge fresh. The inbox list also reloads when these counts change.
+    // The semantic search chip's indexing progress isn't pushed, so status is still polled.
     const poll = () => api.status().then(setStatus).catch(() => {});
     const t = setInterval(poll, 10_000);
+
+    // Live updates: the server pushes an event the moment a document is consumed,
+    // processed or filed. A burst (a 40-page batch landing) becomes one refresh.
+    let pending: ReturnType<typeof setTimeout> | undefined;
+    const changed = () => {
+      if (pending) return;
+      pending = setTimeout(() => { pending = undefined; void poll(); setDocsVersion((v) => v + 1); }, 150);
+    };
+    let opened = false;
+    const events = new EventSource("/api/events");
+    events.onopen = () => {
+      setLive(true);
+      // After a reconnect, catch up on whatever happened while the stream was down.
+      if (opened) changed();
+      opened = true;
+    };
+    events.onerror = () => setLive(false); // EventSource reconnects by itself.
+    events.addEventListener("document", changed);
+    events.addEventListener("resync", changed);
+
     // Background tabs and sleeping phones pause timers; look as soon as Docket is back in view.
     const onVisible = () => { if (document.visibilityState === "visible") void poll(); };
     document.addEventListener("visibilitychange", onVisible);
-    return () => { clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
+    return () => {
+      clearInterval(t);
+      clearTimeout(pending);
+      events.close();
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh, toast]);
 
   return (
-    <Ctx.Provider value={{ catalog, objects, status, refresh, toast }}>
+    <Ctx.Provider value={{ catalog, objects, status, docsVersion, live, refresh, toast }}>
       {children}
       <div className={styles.toasts}>
         {toasts.map((t) => (

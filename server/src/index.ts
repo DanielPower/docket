@@ -9,6 +9,7 @@ import { config } from "./config.ts";
 import { HttpError } from "./errors.ts";
 import { migrate } from "./migrate.ts";
 import { apiRoutes } from "./routes/api.ts";
+import { eventRoutes } from "./routes/events.ts";
 import { startConsumeWatcher } from "./services/ingest.ts";
 import { checkOcrTools } from "./services/ocr.ts";
 import { startSemantic } from "./services/embeddings.ts";
@@ -34,6 +35,7 @@ async function main() {
   });
 
   await app.register(apiRoutes);
+  await app.register(eventRoutes);
 
   // Serve the built web UI (single-page app) when present.
   const webDist = process.env.WEB_DIST ?? path.resolve(here, "../../web/dist");
