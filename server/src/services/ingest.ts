@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { HttpError } from "../errors.ts";
+import { looksComplete } from "./fileComplete.ts";
 import { basePath } from "./pages.ts";
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -117,24 +118,60 @@ export async function deleteDocument(id: string): Promise<void> {
 }
 
 /**
- * Polls the consume directory. A file is ingested once its size has been
- * stable for one poll (so half-copied scans aren't picked up), then removed.
+ * How often the consume folder is scanned. It's usually an NFS or SMB share
+ * written by a scanner on another machine, where file system events never
+ * fire, so scanning is the only signal there is. One readdir and a stat per
+ * file each second is cheap.
+ */
+const POLL_MS = 1000;
+/** A file that stays incomplete this long is taken anyway, so it shows up as unreadable instead of waiting forever. */
+const GIVE_UP_MS = 2 * 60_000;
+
+/** Reads the first and last KB. Opening the file also makes an NFS client fetch fresh attributes (close-to-open), so the size isn't a cached one. */
+async function probe(file: string): Promise<{ size: number; complete: boolean } | null> {
+  const fh = await fs.open(file, "r").catch(() => null);
+  if (!fh) return null;
+  try {
+    const { size } = await fh.stat();
+    if (size === 0) return { size, complete: false };
+    const head = Buffer.alloc(Math.min(1024, size));
+    const tail = Buffer.alloc(Math.min(1024, size));
+    await fh.read(head, 0, head.length, 0);
+    await fh.read(tail, 0, tail.length, size - tail.length);
+    return { size, complete: looksComplete(head, tail) };
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Scans the consume directory every second. A file is ingested, then
+ * removed, once it is complete (its format's end marker is there) and its
+ * size hasn't changed since the previous scan, so half-copied scans aren't
+ * picked up.
  */
 export function startConsumeWatcher(log: (msg: string) => void): void {
   if (!config.consumeDir) return;
-  const lastSize = new Map<string, number>();
+  /** Size at the previous scan, and since when it has been that size. */
+  const seen = new Map<string, { size: number; since: number }>();
   const tick = async () => {
     try {
       await fs.mkdir(config.consumeDir, { recursive: true });
       const names = await listFiles(config.consumeDir);
+      for (const file of seen.keys()) if (!names.includes(file)) seen.delete(file);
       for (const file of names) {
-        const stat = await fs.stat(file).catch(() => null);
-        if (!stat) continue;
-        if (lastSize.get(file) !== stat.size) {
-          lastSize.set(file, stat.size);
+        const p = await probe(file);
+        if (!p) continue;
+        const prev = seen.get(file);
+        if (prev?.size !== p.size) {
+          seen.set(file, { size: p.size, since: Date.now() });
           continue;
         }
-        lastSize.delete(file);
+        if (!p.complete) {
+          if (Date.now() - prev.since < GIVE_UP_MS) continue;
+          log(`${file} still looks incomplete after ${GIVE_UP_MS / 60_000} minutes without growing; taking it anyway`);
+        }
+        seen.delete(file);
         try {
           const res = await ingestBuffer(await fs.readFile(file), path.basename(file));
           log(`consumed ${file} -> ${res.id}${res.duplicate ? " (duplicate)" : ""}`);
@@ -149,7 +186,7 @@ export function startConsumeWatcher(log: (msg: string) => void): void {
     } catch (err) {
       log(`consume watcher error: ${(err as Error).message}`);
     }
-    setTimeout(tick, 5000);
+    setTimeout(tick, POLL_MS);
   };
   setTimeout(tick, 1000);
 }

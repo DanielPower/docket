@@ -110,7 +110,7 @@ export function startWorker(log: (m: string) => void): void {
         log(`worker claim error: ${(err as Error).message}`);
       }
       if (!job) {
-        // Sleep until notified or 30s pass (the timeout also catches stale locks).
+        // Sleep until a document is queued or 30s pass (the timeout also catches stale locks and retries).
         await new Promise<void>((r) => {
           wake = r;
           setTimeout(r, 30_000);
@@ -126,6 +126,13 @@ export function startWorker(log: (m: string) => void): void {
         });
     }
   };
+
+  // Start on a new document right away instead of at the next 30s check. The
+  // notification comes from a trigger, so this works for documents queued by
+  // another process too.
+  sql.listen("docket_document", (payload) => {
+    if ((JSON.parse(payload) as { status: string | null }).status === "queued") wake?.();
+  }).catch((err) => log(`worker can't listen for new documents, checking every 30s: ${(err as Error).message}`));
 
   // Empty old trash now and then.
   const purge = () => purgeTrash().then((n) => n && log(`purged ${n} document(s) from the trash`)).catch((err) => log(`trash purge failed: ${(err as Error).message}`));
