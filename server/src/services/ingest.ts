@@ -154,14 +154,23 @@ export function startConsumeWatcher(log: (msg: string) => void): void {
   if (!config.consumeDir) return;
   /** Size at the previous scan, and since when it has been that size. */
   const seen = new Map<string, { size: number; since: number }>();
+  /**
+   * Files that couldn't be removed or moved to .failed (a read-only share, say),
+   * by size. They're left alone until they change, instead of being retried
+   * every second.
+   */
+  const stuck = new Map<string, number>();
   const tick = async () => {
     try {
       await fs.mkdir(config.consumeDir, { recursive: true });
       const names = await listFiles(config.consumeDir);
       for (const file of seen.keys()) if (!names.includes(file)) seen.delete(file);
+      for (const file of stuck.keys()) if (!names.includes(file)) stuck.delete(file);
       for (const file of names) {
         const p = await probe(file);
         if (!p) continue;
+        if (stuck.get(file) === p.size) continue;
+        stuck.delete(file);
         const prev = seen.get(file);
         if (prev?.size !== p.size) {
           seen.set(file, { size: p.size, since: Date.now() });
@@ -172,15 +181,24 @@ export function startConsumeWatcher(log: (msg: string) => void): void {
           log(`${file} still looks incomplete after ${GIVE_UP_MS / 60_000} minutes without growing; taking it anyway`);
         }
         seen.delete(file);
+        let res: IngestResult | null = null;
         try {
-          const res = await ingestBuffer(await fs.readFile(file), path.basename(file));
+          res = await ingestBuffer(await fs.readFile(file), path.basename(file));
           log(`consumed ${file} -> ${res.id}${res.duplicate ? " (duplicate)" : ""}`);
           await fs.rm(file);
         } catch (err) {
-          log(`could not consume ${file}: ${(err as Error).message}`);
+          if (!res) log(`could not consume ${file}: ${(err as Error).message}`);
+          // Taken but not removable, or not taken: move it out of the way if possible.
           const failedDir = path.join(config.consumeDir, ".failed");
-          await fs.mkdir(failedDir, { recursive: true });
-          await fs.rename(file, path.join(failedDir, path.basename(file))).catch(() => {});
+          const moved = res
+            ? false
+            : await fs.mkdir(failedDir, { recursive: true })
+                .then(() => fs.rename(file, path.join(failedDir, path.basename(file))))
+                .then(() => true, () => false);
+          if (!moved) {
+            stuck.set(file, p.size);
+            log(`can't remove or move ${file} (read-only?); leaving it alone until it changes`);
+          }
         }
       }
     } catch (err) {
@@ -191,10 +209,16 @@ export function startConsumeWatcher(log: (msg: string) => void): void {
   setTimeout(tick, 1000);
 }
 
+/**
+ * Not scans: hidden files and NAS system folders (QNAP @Recently-Snapshot,
+ * Synology @eaDir and #recycle, Windows desktop.ini and Thumbs.db).
+ */
+const SKIP_NAME = /^[.@#~]|^(desktop\.ini|thumbs\.db)$/i;
+
 async function listFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
   for (const ent of await fs.readdir(dir, { withFileTypes: true })) {
-    if (ent.name.startsWith(".")) continue;
+    if (SKIP_NAME.test(ent.name)) continue;
     const p = path.join(dir, ent.name);
     if (ent.isDirectory()) out.push(...(await listFiles(p)));
     else if (ent.isFile()) out.push(p);
