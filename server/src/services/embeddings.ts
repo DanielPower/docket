@@ -13,12 +13,46 @@ interface State {
   available: boolean;
   reason: string;
   dims: number;
+  /** Docket is still trying to turn semantic search on (the API was unreachable). */
+  retrying: boolean;
+  /** The background job's latest failure, cleared when it next succeeds. */
+  lastError: string | null;
 }
 
-const state: State = { available: false, reason: "not initialized", dims: 0 };
+const state: State = { available: false, reason: "not initialized", dims: 0, retrying: false, lastError: null };
 
-export function semanticStatus(): { available: boolean; reason: string; model: string } {
-  return { available: state.available, reason: state.reason, model: config.embeddings.model };
+export interface SemanticStatus {
+  /** EMBEDDING_URL is set. When false, semantic search is off on purpose. */
+  configured: boolean;
+  available: boolean;
+  /** Why semantic search is off; empty when it's on. */
+  reason: string;
+  retrying: boolean;
+  model: string;
+  /** Documents with text that aren't embedded with the current model yet. */
+  pending: number;
+  lastError: string | null;
+}
+
+export async function semanticStatus(): Promise<SemanticStatus> {
+  const configured = !!config.embeddings.url;
+  let pending = 0;
+  if (configured) {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from document
+      where status in ('analyzing', 'inbox', 'filed')
+        and embedded_model is distinct from ${config.embeddings.model}`;
+    pending = row.n;
+  }
+  return {
+    configured,
+    available: state.available,
+    reason: state.reason,
+    retrying: state.retrying,
+    model: config.embeddings.model,
+    pending,
+    lastError: state.lastError,
+  };
 }
 
 export function semanticAvailable(): boolean {
@@ -146,20 +180,45 @@ async function initSemantic(log: (m: string) => void): Promise<"on" | "off" | "r
  * API is unreachable (e.g. llama-swap starting after Docket). Once on, starts
  * the embedding job when this process runs the worker.
  */
+let retryNow: (() => Promise<void>) | null = null;
+
 export function startSemantic(log: (m: string) => void, runJob: boolean): void {
   let attempt = 0;
+  let timer: NodeJS.Timeout | null = null;
+  let running: Promise<void> | null = null;
   const tryInit = async () => {
+    timer = null;
     let result: "on" | "off" | "retry";
     try {
       result = await initSemantic(log);
     } catch (err) {
       log(`semantic search setup failed: ${(err as Error).message}`);
+      state.available = false;
+      state.reason = `setup failed: ${(err as Error).message}`;
       result = "retry";
     }
+    state.retrying = result === "retry";
     if (result === "on" && runJob) startEmbeddingJob(log);
-    if (result === "retry") setTimeout(tryInit, Math.min(30_000 * 2 ** attempt++, 600_000));
+    if (result === "retry") timer = setTimeout(run, Math.min(30_000 * 2 ** attempt++, 600_000));
   };
-  void tryInit();
+  const run = () => (running ??= tryInit().finally(() => (running = null)));
+  retryNow = async () => {
+    if (!state.retrying) return;
+    if (timer) clearTimeout(timer);
+    attempt = 0;
+    await run();
+  };
+  void run();
+}
+
+/**
+ * Checks the embeddings API again right away instead of waiting for the next
+ * scheduled retry, and asks the embedding job to look for work. Returns once
+ * the check is done.
+ */
+export async function retrySemantic(): Promise<void> {
+  if (state.available) kickEmbeddings();
+  else await retryNow?.();
 }
 
 /** Embeds one document: chunk 0 is the title, chunks 1.. are the OCR text. */
@@ -206,8 +265,11 @@ export function kickEmbeddings(): void {
  * Embeds documents that have text but no vectors for the current model: new
  * documents, and every document after a model change.
  */
+let jobStarted = false;
+
 function startEmbeddingJob(log: (m: string) => void): void {
-  if (!state.available) return;
+  if (!state.available || jobStarted) return;
+  jobStarted = true;
   let failures = 0;
   const loop = async () => {
     for (;;) {
@@ -224,8 +286,10 @@ function startEmbeddingJob(log: (m: string) => void): void {
           did++;
         }
         failures = 0;
+        state.lastError = null;
       } catch (err) {
         failures++;
+        state.lastError = (err as Error).message;
         log(`embedding failed: ${(err as Error).message}`);
       }
       if (did === 10) continue;

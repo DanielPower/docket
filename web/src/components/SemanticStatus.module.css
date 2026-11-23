@@ -1,0 +1,11 @@
+.wrap { margin-right: 6px; }
+.chip { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 12px; font-size: 12px; color: var(--muted); background: var(--sunk); cursor: pointer; white-space: nowrap; }
+.chipWarn { color: var(--text); background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--text) 15%, transparent); }
+.panel { width: 300px; max-width: calc(100vw - 24px); padding: 10px 12px; gap: 6px; font-size: 13px; }
+.panel p { margin: 0; overflow-wrap: anywhere; }
+.actions { margin-top: 4px; }
+/* Phones: the chip sits near the left of the top bar, so the panel spans the screen instead of hanging off it. */
+@media (max-width: 700px) {
+  .wrap { position: static; }
+  .panel { position: fixed; left: 12px; right: 12px; top: calc(48px + env(safe-area-inset-top)); width: auto; max-width: none; }
+}

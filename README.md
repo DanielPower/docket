@@ -142,7 +142,7 @@ Semantic search needs two things. Without them it stays off and everything else 
 
 2. **An embedding model** behind an OpenAI-compatible `/v1/embeddings` API, such as llama-swap/llama-server, Ollama, or a hosted service. Set `EMBEDDING_URL` and `EMBEDDING_MODEL`. The defaults suit Qwen3-Embedding served by llama-server with `--embedding --pooling last`.
 
-Documents are embedded in the background after OCR, and existing documents are embedded the first time semantic search turns on. If the embeddings API is unreachable, search falls back to keywords and Docket keeps retrying. Changing `EMBEDDING_MODEL` re-embeds everything; if the new model has different dimensions, the old vectors are dropped first. The status shown by `GET /api/status` (`semantic.reason`) explains why semantic search is off.
+Documents are embedded in the background after OCR, and existing documents are embedded the first time semantic search turns on. If the embeddings API is unreachable, search falls back to keywords and Docket keeps retrying. Changing `EMBEDDING_MODEL` re-embeds everything; if the new model has different dimensions, the old vectors are dropped first. When semantic search is configured but off, or documents are still waiting to be embedded, a chip in the top bar says so and why, with a **Retry now** button that checks the embeddings API immediately (also `POST /api/semantic/retry`). `GET /api/status` has the same details under `semantic`.
 
 Field values are stored in typed columns (`numeric`, `date`, `boolean`, `uuid` refs), so they're straightforward to query from SQL too. For example, maintenance spending per vehicle per year:
 
