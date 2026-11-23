@@ -8,6 +8,7 @@ import { AppDataProvider, useAppData } from "./data";
 import { CommandPalette } from "./components/CommandPalette";
 import { Icon } from "./components/Icon";
 import { ScanDialog } from "./components/ScanDialog";
+import { SemanticStatus } from "./components/SemanticStatus";
 import { AskPage } from "./pages/Ask";
 import { ComponentsPage } from "./pages/Components";
 import { DocumentPage } from "./pages/DocumentPage";
@@ -123,6 +124,7 @@ function Shell() {
           <kbd className={styles.searchKey}>{isMac ? "⌘K" : "Ctrl K"}</kbd>
         </button>
         <span className={ui.spacer} />
+        <SemanticStatus />
         {status && !status.ai && <span className={cx(ui.muted, ui.small, styles.aiOff)} title="Set ANTHROPIC_API_KEY to enable">AI off</span>}
         <div className={styles.actions}>
           <button onClick={() => setScanning(true)} title="Take photos of a document, one per page">Scan</button>

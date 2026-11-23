@@ -12,7 +12,7 @@ import { deleteDocument, ingestBuffer, purgeTrash, restoreDocument, trashDocumen
 import { findDuplicates, mergeObjects, reconcileDraft } from "../services/objects.ts";
 import { aggregateDocuments, searchDocuments, type SearchParams } from "../services/search.ts";
 import { askQuestion, interpretQuestion } from "../services/ai-query.ts";
-import { refreshTitleChunk, semanticStatus } from "../services/embeddings.ts";
+import { refreshTitleChunk, retrySemantic, semanticStatus } from "../services/embeddings.ts";
 import { isUuid } from "../services/values.ts";
 import type { DocumentDetail, DocumentStatus, DraftValue, ObjectDetail, ObjectSummary, Proposal } from "../shared/types.ts";
 import { ComponentInputSchema, DraftSchema } from "./schemas.ts";
@@ -27,9 +27,15 @@ export async function apiRoutes(app: FastifyInstance) {
     return {
       ai: aiAvailable(),
       model: config.ai.model,
-      semantic: semanticStatus(),
+      semantic: await semanticStatus(),
       counts: Object.fromEntries(counts.map((c) => [c.status, c.n])),
     };
+  });
+
+  // Check the embeddings API again now instead of waiting for the next retry.
+  app.post("/api/semantic/retry", async () => {
+    await retrySemantic();
+    return semanticStatus();
   });
 
   // ---------------------------------------------------------------- documents

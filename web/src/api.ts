@@ -32,10 +32,25 @@ export interface DuplicateGroup {
   objects: Array<{ id: string; title: string; documentCount: number }>;
 }
 
+export interface SemanticStatus {
+  /** EMBEDDING_URL is set; when false, semantic search is off on purpose. */
+  configured: boolean;
+  available: boolean;
+  /** Why it's off; empty when on. */
+  reason: string;
+  /** Docket is still trying to reach the embeddings API. */
+  retrying: boolean;
+  model: string;
+  /** Documents not yet embedded with the current model. */
+  pending: number;
+  /** The background embedding job's latest failure, if it hasn't succeeded since. */
+  lastError: string | null;
+}
+
 export interface Status {
   ai: boolean;
   model: string;
-  semantic: { available: boolean; reason: string; model: string };
+  semantic: SemanticStatus;
   counts: Record<string, number>;
 }
 
@@ -71,6 +86,7 @@ function qs(params: SearchQuery): string {
 
 export const api = {
   status: () => request<Status>("GET", "/api/status"),
+  retrySemantic: () => request<SemanticStatus>("POST", "/api/semantic/retry"),
 
   searchDocuments: (p: SearchQuery) =>
     request<{ total: number; items: DocumentSummary[]; semantic: boolean }>("GET", `/api/documents?${qs(p)}`),
