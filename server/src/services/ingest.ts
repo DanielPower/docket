@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { HttpError } from "../errors.ts";
+import { basePath } from "./pages.ts";
 
 const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -110,7 +111,7 @@ export async function deleteDocument(id: string): Promise<void> {
     select original_path, archive_path, thumb_path from document where entity_id = ${id}`;
   if (!doc) throw new HttpError(404, "Document not found.");
   await sql`delete from entity where id = ${id}`;
-  for (const p of [doc.original_path, doc.archive_path, doc.thumb_path]) {
+  for (const p of [doc.original_path, doc.archive_path, doc.thumb_path, basePath(id)]) {
     if (p) await fs.rm(path.join(config.dataDir, p), { force: true });
   }
 }

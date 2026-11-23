@@ -10,6 +10,7 @@ import type {
   Draft,
   ObjectDetail,
   ObjectSummary,
+  PageOp,
   Proposal,
 } from "./types";
 
@@ -98,6 +99,9 @@ export const api = {
   revise: (id: string, draft: Draft, feedback: string) => request<Proposal>("POST", `/api/documents/${id}/revise`, { draft, feedback }),
   reconcile: (draft: Draft, sameAs: Record<string, string> = {}) =>
     request<{ draft: Draft; notes: string[] }>("POST", "/api/drafts/reconcile", { draft, sameAs }),
+  /** Rewrites the pages (rotate, flip, crop, reorder, remove) and reads the text again. */
+  editPages: (id: string, pages: PageOp[]) => request<{ ok: true }>("PUT", `/api/documents/${id}/pages`, { pages }),
+  revertPages: (id: string) => request<{ ok: true }>("POST", `/api/documents/${id}/pages/revert`),
   reanalyze: (id: string, ocr = false) => request<{ ok: true }>("POST", `/api/documents/${id}/reanalyze`, { ocr }),
   /** To the trash; `forever` deletes the document and its files now. */
   deleteDocument: (id: string, forever = false) => request<{ ok: true }>("DELETE", `/api/documents/${id}${forever ? "?forever=1" : ""}`),
@@ -126,6 +130,7 @@ export const api = {
   deleteObject: (id: string) => request<{ ok: true }>("DELETE", `/api/objects/${id}`),
 };
 
-export const fileUrl = (id: string, kind: "archive" | "original" = "archive", download = false) =>
-  `/api/documents/${id}/file?kind=${kind}${download ? "&download=1" : ""}`;
+/** `version` (DocumentDetail.fileVersion) makes a new URL whenever page edits rewrite the PDF. */
+export const fileUrl = (id: string, kind: "archive" | "original" = "archive", download = false, version?: string) =>
+  `/api/documents/${id}/file?kind=${kind}${download ? "&download=1" : ""}${version ? `&v=${version}` : ""}`;
 export const thumbUrl = (id: string) => `/api/documents/${id}/thumb`;

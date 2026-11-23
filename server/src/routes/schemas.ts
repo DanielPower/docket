@@ -53,3 +53,12 @@ export const DraftSchema = z.object({
     )
     .default([]),
 });
+
+export const PageOpSchema = z.object({
+  from: z.number().int().min(1),
+  rotate: z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]).optional(),
+  flipH: z.boolean().optional(),
+  flipV: z.boolean().optional(),
+  straighten: z.number().min(-45).max(45).optional(),
+  crop: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).nullable().optional(),
+});

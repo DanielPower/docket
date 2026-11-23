@@ -9,13 +9,14 @@ import { aiAvailable, analyzeDocument, generateComponent } from "../services/ai.
 import { createComponent, deleteComponent, listComponents, updateComponent } from "../services/components.ts";
 import { applyDraft, describeComponents, loadComponents, loadDraft, refTitles } from "../services/entities.ts";
 import { deleteDocument, ingestBuffer, purgeTrash, restoreDocument, trashDocument } from "../services/ingest.ts";
+import { editPages, revertPages } from "../services/pages.ts";
 import { findDuplicates, mergeObjects, reconcileDraft } from "../services/objects.ts";
 import { aggregateDocuments, searchDocuments, type SearchParams } from "../services/search.ts";
 import { askQuestion, interpretQuestion } from "../services/ai-query.ts";
 import { refreshTitleChunk, retrySemantic, semanticStatus } from "../services/embeddings.ts";
 import { isUuid } from "../services/values.ts";
 import type { DocumentDetail, DocumentStatus, DraftValue, ObjectDetail, ObjectSummary, Proposal } from "../shared/types.ts";
-import { ComponentInputSchema, DraftSchema } from "./schemas.ts";
+import { ComponentInputSchema, DraftSchema, PageOpSchema } from "./schemas.ts";
 
 const IdParams = z.object({ id: z.string().refine(isUuid, "invalid id") });
 const asArray = (v: unknown) => (v === undefined ? undefined : Array.isArray(v) ? v.map(String) : String(v).split(",").filter(Boolean));
@@ -121,7 +122,8 @@ export async function apiRoutes(app: FastifyInstance) {
     const [d] = await sql`
       select e.id, e.title, d.status, d.original_filename, d.mime_type, d.document_date, d.added_at, d.page_count,
              d.thumb_path is not null as has_thumb, d.archive_path is not null as has_archive, d.error,
-             d.content, d.file_size, d.proposal
+             d.content, d.file_size, d.proposal, d.page_edits is not null as pages_edited,
+             coalesce(extract(epoch from d.pages_edited_at)::text, '0') as file_version
       from document d join entity e on e.id = d.entity_id where e.id = ${id}`;
     if (!d) throw new HttpError(404, "Document not found.");
     const current = await loadDraft(sql, id);
@@ -143,6 +145,8 @@ export async function apiRoutes(app: FastifyInstance) {
       pageCount: d.page_count,
       hasThumb: d.has_thumb,
       hasArchive: d.has_archive,
+      pagesEdited: d.pages_edited,
+      fileVersion: d.file_version,
       error: d.error,
       content: d.content,
       fileSize: Number(d.file_size),
@@ -170,8 +174,14 @@ export async function apiRoutes(app: FastifyInstance) {
     const { id } = IdParams.parse(req.params);
     const [d] = await sql<{ thumb_path: string | null }[]>`select thumb_path from document where entity_id = ${id}`;
     if (!d?.thumb_path) throw new HttpError(404, "No thumbnail.");
-    reply.header("content-type", "image/png").header("cache-control", "private, max-age=86400");
-    return reply.send(fs.createReadStream(path.join(config.dataDir, d.thumb_path)));
+    const file = path.join(config.dataDir, d.thumb_path);
+    // Page edits redraw the thumbnail under the same URL, so browsers check back (cheaply, by ETag).
+    const stat = await fs.promises.stat(file).catch(() => null);
+    if (!stat) throw new HttpError(404, "No thumbnail.");
+    const etag = `"${stat.size.toString(36)}-${Math.floor(stat.mtimeMs).toString(36)}"`;
+    reply.header("content-type", "image/png").header("cache-control", "private, no-cache").header("etag", etag);
+    if (req.headers["if-none-match"] === etag) return reply.code(304).send();
+    return reply.send(fs.createReadStream(file));
   });
 
   /** Saves a draft. With file=true the document leaves the inbox. */
@@ -222,6 +232,21 @@ export async function apiRoutes(app: FastifyInstance) {
     }
     await sql`update document set proposal = ${sql.json(proposal as never)}, error = null where entity_id = ${id} and status = 'inbox'`;
     return proposal;
+  });
+
+  /** Rotates, flips, straightens, crops, reorders or removes pages, then reads the text again. */
+  app.put("/api/documents/:id/pages", async (req) => {
+    const { id } = IdParams.parse(req.params);
+    const { pages } = z.object({ pages: z.array(PageOpSchema).min(1).max(2000) }).parse(req.body);
+    await editPages(id, pages);
+    return { ok: true };
+  });
+
+  /** Undoes all page edits: back to the searchable PDF as first produced. */
+  app.post("/api/documents/:id/pages/revert", async (req) => {
+    const { id } = IdParams.parse(req.params);
+    await revertPages(id);
+    return { ok: true };
   });
 
   /** Moves the document to the trash; with ?forever=1 deletes it and its files now. */
