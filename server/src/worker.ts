@@ -1,9 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { config } from "./config.ts";
 import { sql } from "./db.ts";
 import { aiAvailable, analyzeDocument } from "./services/ai.ts";
 import { MissingToolError, runOcr } from "./services/ocr.ts";
 import { kickEmbeddings } from "./services/embeddings.ts";
 import { purgeTrash } from "./services/ingest.ts";
+import { basePath } from "./services/pages.ts";
 
 const MAX_ATTEMPTS = 3;
 /** Wait before the next attempt, indexed by the number of attempts made so far. */
@@ -48,8 +51,11 @@ async function processJob(job: Job, log: (m: string) => void): Promise<void> {
       const ocr = await runOcr({ id, originalPath: job.original_path, mime: job.mime_type });
       await sql`
         update document set content = ${ocr.content}, archive_path = ${ocr.archivePath},
-          thumb_path = ${ocr.thumbPath}, page_count = ${ocr.pageCount}
+          thumb_path = ${ocr.thumbPath}, page_count = ${ocr.pageCount},
+          page_edits = null, pages_edited_at = case when page_edits is null then pages_edited_at else clock_timestamp() end
         where entity_id = ${id}`;
+      // Read again from the upload: earlier page edits are gone.
+      await fs.rm(path.join(config.dataDir, basePath(id)), { force: true });
       await sql`select refresh_document_search(${id})`;
     }
   } catch (err) {

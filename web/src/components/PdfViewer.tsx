@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import * as pdfjs from "pdfjs-dist";
 import type { PDFPageProxy, RenderTask } from "pdfjs-dist";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import ui from "../ui.module.css";
+import { Icon } from "./Icon";
 import { cx } from "../cx";
 import { indexOfToken, normalize } from "../provenance";
 import styles from "./PdfViewer.module.css";
@@ -20,7 +21,18 @@ type PageInfo = { page: PDFPageProxy; width: number; height: number };
  * Used instead of an <iframe>, which mobile browsers (Android Chrome in particular) don't render.
  * This module pulls in PDF.js, so load it with React.lazy.
  */
-export default function PdfViewer({ url, highlight }: { url: string; highlight?: string[] | null }) {
+export type PdfViewerProps = {
+  url: string;
+  highlight?: string[] | null;
+  /** Shows ↺ ↻ on each page (on hover, or after a tap on touch screens). */
+  onRotatePage?: (page: number, turn: 90 | 270) => void;
+  /** Shows an "Edit pages" button in the toolbar. */
+  onEditPages?: () => void;
+  /** Page tools are disabled while a page edit is saving. */
+  busy?: boolean;
+};
+
+export default function PdfViewer({ url, highlight, onRotatePage, onEditPages, busy }: PdfViewerProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const [pages, setPages] = useState<PageInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +43,16 @@ export default function PdfViewer({ url, highlight }: { url: string; highlight?:
   const [current, setCurrent] = useState(1);
   /** Bumped whenever a page's text layer finishes drawing, so highlights are reapplied. */
   const [drawn, setDrawn] = useState(0);
+  /** On touch screens a tap shows a page's tools. */
+  const [toolsOn, setToolsOn] = useState<number | null>(null);
+  /** When the URL changes (the pages were edited) come back to the same page. */
+  const keepPage = useRef(1);
+  const currentRef = useRef(1);
+  currentRef.current = current;
 
   useEffect(() => {
     let cancelled = false;
+    keepPage.current = currentRef.current;
     setPages(null);
     setError(null);
     setCurrent(1);
@@ -97,6 +116,14 @@ export default function PdfViewer({ url, highlight }: { url: string; highlight?:
     }
   }, [highlight, drawn]);
 
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || !pages || keepPage.current <= 1) return;
+    const target = el.querySelector<HTMLElement>(`[data-page="${Math.min(keepPage.current, pages.length)}"]`);
+    keepPage.current = 1;
+    if (target) el.scrollTop = target.offsetTop - 8;
+  }, [pages, width]);
+
   const widest = pages ? Math.max(...pages.map((p) => p.width)) : 1;
   const fit = width > 0 ? Math.max(0.1, width / widest) : 0;
   const scale = fit * zoom;
@@ -120,11 +147,28 @@ export default function PdfViewer({ url, highlight }: { url: string; highlight?:
       <div className={styles.toolbar}>
         <span className={cx(ui.small, styles.pageCount)}>{pages ? `${current} / ${pages.length}` : ""}</span>
         <span className={ui.spacer} />
+        {onEditPages && (
+          <>
+            <button className={cx(ui.compact, styles.editBtn)} onClick={onEditPages} disabled={busy || !pages} title="Rotate, flip, crop, reorder or remove pages">
+              <Icon name="pages" size={15} /><span className={styles.editLabel}>Edit pages</span>
+            </button>
+            <span className={styles.sep} />
+          </>
+        )}
         <button className={ui.compact} onClick={() => stepZoom(-1)} disabled={zoom <= ZOOM_STEPS[0]} aria-label="Zoom out">−</button>
         <button className={ui.compact} onClick={() => setZoom(1)} disabled={zoom === 1} title="Fit to width">{Math.round(zoom * 100)}%</button>
         <button className={ui.compact} onClick={() => stepZoom(1)} disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]} aria-label="Zoom in">+</button>
       </div>
-      <div ref={scroller} className={styles.scroller}>
+      <div
+        ref={scroller}
+        className={styles.scroller}
+        onClick={(e) => {
+          // Touch screens have no hover: a tap on a page shows its tools.
+          if (!onRotatePage || !window.matchMedia("(hover: none)").matches) return;
+          const n = Number((e.target as HTMLElement).closest<HTMLElement>("[data-page]")?.dataset.page);
+          setToolsOn((t) => (n && t !== n ? n : null));
+        }}
+      >
         {error ? (
           <p className={styles.message}>Couldn't show this PDF: {error}</p>
         ) : !pages ? (
@@ -132,7 +176,20 @@ export default function PdfViewer({ url, highlight }: { url: string; highlight?:
         ) : (
           scale > 0 && (
             <div className={styles.pages}>
-              {pages.map((p, i) => <Page key={i} n={i + 1} info={p} scale={scale} root={scroller} onText={() => setDrawn((n) => n + 1)} />)}
+              {pages.map((p, i) => (
+                <Page key={i} n={i + 1} info={p} scale={scale} root={scroller} onText={() => setDrawn((n) => n + 1)}>
+                  {onRotatePage && (
+                    <div
+                      className={cx(styles.pageTools, toolsOn === i + 1 && styles.pageToolsOn)}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button className={ui.compact} disabled={busy} onClick={() => onRotatePage(i + 1, 270)} title="Rotate this page left" aria-label={`Rotate page ${i + 1} left`}><Icon name="rotateLeft" size={16} /></button>
+                      <button className={ui.compact} disabled={busy} onClick={() => onRotatePage(i + 1, 90)} title="Rotate this page right" aria-label={`Rotate page ${i + 1} right`}><Icon name="rotateRight" size={16} /></button>
+                      {onEditPages && <button className={ui.compact} disabled={busy} onClick={onEditPages} title="More page edits" aria-label="Edit pages"><Icon name="more" size={16} /></button>}
+                    </div>
+                  )}
+                </Page>
+              ))}
             </div>
           )
         )}
@@ -141,7 +198,7 @@ export default function PdfViewer({ url, highlight }: { url: string; highlight?:
   );
 }
 
-function Page({ n, info, scale, root, onText }: { n: number; info: PageInfo; scale: number; root: RefObject<HTMLDivElement | null>; onText: () => void }) {
+function Page({ n, info, scale, root, onText, children }: { n: number; info: PageInfo; scale: number; root: RefObject<HTMLDivElement | null>; onText: () => void; children?: ReactNode }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const textLayer = useRef<HTMLDivElement>(null);
@@ -194,6 +251,7 @@ function Page({ n, info, scale, root, onText }: { n: number; info: PageInfo; sca
     >
       {near && <canvas ref={canvas} className={styles.canvas} />}
       {near && <div ref={textLayer} className={styles.textLayer} />}
+      {children}
     </div>
   );
 }

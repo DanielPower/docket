@@ -39,6 +39,14 @@ Because filed documents are used as examples, the AI picks up your conventions a
 
 **Trash.** Deleted documents go to the trash (in the ⚙ menu) and are deleted for good, with their files, after 30 days. Uploading a file that's in the trash restores it.
 
+## Fixing pages
+
+A page that came out sideways, mirrored, crooked or blank can be fixed in the document viewer, on a document's page or in the inbox:
+
+- Hover over a page (tap it on a phone) for **↺ ↻**. One click rotates that page, saves, and reads its text again, with Undo.
+- **Edit pages** in the viewer toolbar opens a grid of the pages: rotate, flip left to right or top to bottom, crop and straighten (with **Detect edges** for photos of paper on a desk), remove pages, or drag them into a new order. Every pending change is listed with its own Undo, and nothing is written until **Save**. Keys: `R` / `Shift+R` rotate, `H` / `V` flip, `C` crop, `Delete` remove, `Ctrl+Z` undo.
+
+Saving rebuilds the searchable PDF from the original upload plus the full list of edits, then runs OCR on it again (without `--rotate-pages`, since you chose the rotation), so edits never stack up losses. Born-digital pages keep their vector text; photos are re-rendered from the first searchable PDF. The original upload is never changed, the first searchable PDF is kept as `archive/<id>.base.pdf` while edits exist, and **Revert to original pages** in the ⋯ menu puts it back. The filed title and details aren't touched. Re-analyzing with OCR from the original drops the page edits. API: `PUT /api/documents/:id/pages` and `POST /api/documents/:id/pages/revert`.
 ## On your phone
 
 Docket works in a phone's browser: the navigation moves to a bottom tab bar (with + for Scan and Upload), the inbox and document pages stack, and search filters fold behind a **Filters** button. PDFs are drawn with PDF.js, since mobile browsers don't show a PDF inside a page.
@@ -203,11 +211,13 @@ server/src/
   services/entities.ts      loading and applying drafts (the inbox, document, and object editors all use this)
   services/ai.ts            Claude prompts, structured-output schema, validation of the model's output
   services/ocr.ts           OCRmyPDF / pdftotext / thumbnails
+  services/pages.ts         page edits: rebuilds the PDF with pdf-lib, then OCRs it
   services/search.ts        full-text, semantic and field filters; totals
   services/embeddings.ts    embeddings API client, pgvector table, background embedding job
   services/ai-query.ts      Ask AI (question -> filters) and the Ask assistant (tool use)
   worker.ts                 queued -> ocr -> analyzing -> inbox (uses SELECT … FOR UPDATE SKIP LOCKED; no Redis)
   shared/types.ts           types shared with the web UI
+  shared/pageTransform.ts   page edit geometry, shared with the page editor
 web/src/
   components/DraftEditor.tsx  the metadata editor used in the inbox, on documents, and on objects
   pages/                      Inbox, Documents (search), Ask, Objects, Components

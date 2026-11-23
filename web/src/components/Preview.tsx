@@ -2,17 +2,18 @@ import { lazy, Suspense, useEffect, useMemo, useRef } from "react";
 import { fileUrl } from "../api";
 import { cx } from "../cx";
 import type { DocumentDetail } from "../types";
+import type { PdfViewerProps } from "./PdfViewer";
 import styles from "./Preview.module.css";
 
 /** PDF.js is large, so it loads only when a PDF is shown. */
 const PdfViewer = lazy(() => import("./PdfViewer"));
 
 /** Shows a document; `highlight` marks where one of those strings appears (PDFs and text files). */
-export function Preview({ doc, highlight }: { doc: DocumentDetail; highlight?: string[] | null }) {
+export function Preview({ doc, highlight, pageTools }: { doc: DocumentDetail; highlight?: string[] | null; pageTools?: Pick<PdfViewerProps, "onRotatePage" | "onEditPages" | "busy"> }) {
   if (doc.hasArchive) {
     return (
       <Suspense fallback={<div className={styles.preview} />}>
-        <PdfViewer url={fileUrl(doc.id)} highlight={highlight} />
+        <PdfViewer url={fileUrl(doc.id, "archive", false, doc.fileVersion)} highlight={highlight} {...pageTools} />
       </Suspense>
     );
   }

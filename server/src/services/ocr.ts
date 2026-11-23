@@ -79,17 +79,29 @@ export async function runOcr(opts: { id: string; originalPath: string; mime: str
   await fs.mkdir(path.dirname(archive), { recursive: true });
   await fs.mkdir(path.dirname(thumbBase), { recursive: true });
 
+  await ocrPdf(original, archive, { rotatePages: true, imageDpi: opts.mime.startsWith("image/") ? 300 : undefined });
+  const { content, pageCount } = await extractText(archive);
+  const thumbPath = (await renderThumb(archive, thumbBase)) ? thumbRel : null;
+  return { content, archivePath: archiveRel, thumbPath, pageCount };
+}
+
+/**
+ * Runs OCRmyPDF: adds a text layer to pages that are images and leaves pages
+ * that already have text alone. `rotatePages` lets it turn pages it reads as
+ * sideways; page edits turn it off, since the owner chose the rotation.
+ */
+export async function ocrPdf(input: string, output: string, opts: { rotatePages: boolean; imageDpi?: number }): Promise<void> {
   const args = [
     "--skip-text", // keep born-digital text; only OCR pages that are images
-    "--rotate-pages",
+    ...(opts.rotatePages ? ["--rotate-pages"] : []),
     "--output-type", "pdf",
     "-l", config.ocr.languages,
     "-j", "1",
     "-q",
   ];
-  if (opts.mime.startsWith("image/")) args.push("--image-dpi", "300");
+  if (opts.imageDpi) args.push("--image-dpi", String(opts.imageDpi));
   try {
-    await run(config.ocr.ocrmypdfBin, [...args, original, archive], { timeout: 30 * 60_000, maxBuffer: 64 * 1024 * 1024 });
+    await run(config.ocr.ocrmypdfBin, [...args, input, output], { timeout: 30 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   } catch (err) {
     if (err instanceof MissingToolError) throw err;
     const e = err as { code?: number | string; stderr?: string; message: string };
@@ -98,26 +110,31 @@ export async function runOcr(opts: { id: string; originalPath: string; mime: str
     if (e.code === 8) throw new Error("The PDF is encrypted; decrypt it and upload again.");
     throw new Error(`OCR failed (exit ${e.code}): ${detail}`);
   }
+}
 
-  const { stdout: text } = await run("pdftotext", ["-layout", "-enc", "UTF-8", archive, "-"], { maxBuffer: 256 * 1024 * 1024 });
-  const { stdout: info } = await run("pdfinfo", [archive]);
+/** The text of a searchable PDF and its page count. */
+export async function extractText(pdf: string): Promise<{ content: string; pageCount: number | null }> {
+  const { stdout: text } = await run("pdftotext", ["-layout", "-enc", "UTF-8", pdf, "-"], { maxBuffer: 256 * 1024 * 1024 });
+  const { stdout: info } = await run("pdfinfo", [pdf]);
   const pages = /^Pages:\s+(\d+)/m.exec(info);
+  return { content: cleanText(text), pageCount: pages ? Number(pages[1]) : null };
+}
 
-  let thumbPath: string | null = null;
+/** Renders the first page to `<thumbBase>.png`. False if that failed (a thumbnail is cosmetic). */
+export async function renderThumb(pdf: string, thumbBase: string): Promise<boolean> {
   try {
-    await run("pdftoppm", ["-png", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "480", archive, thumbBase]);
-    thumbPath = thumbRel;
+    await run("pdftoppm", ["-png", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "480", pdf, thumbBase]);
+    return true;
   } catch (err) {
-    // A failed thumbnail is cosmetic, but a missing program is not.
+    // A missing program is not cosmetic.
     if (err instanceof MissingToolError) throw err;
+    return false;
   }
+}
 
-  return {
-    content: cleanText(text),
-    archivePath: archiveRel,
-    thumbPath,
-    pageCount: pages ? Number(pages[1]) : null,
-  };
+/** Renders one page (1-based) as a 300 dpi JPEG at `<outBase>.jpg`. */
+export async function renderPageJpeg(pdf: string, page: number, outBase: string): Promise<void> {
+  await run("pdftoppm", ["-jpeg", "-jpegopt", "quality=90", "-r", "300", "-f", String(page), "-l", String(page), "-singlefile", pdf, outBase]);
 }
 
 function cleanText(s: string): string {

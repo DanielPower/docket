@@ -241,6 +241,32 @@ export function InboxPage() {
     }
   };
 
+  /** Quick rotate from the preview: saves at once (the review in progress is kept), with Undo. */
+  const rotatePage = async (page: number, turn: 90 | 270) => {
+    if (!doc) return;
+    const id = doc.id;
+    const ops = (rotate: 90 | 270) => Array.from({ length: doc.pageCount ?? 1 }, (_, i) => (i + 1 === page ? { from: i + 1, rotate } : { from: i + 1 }));
+    // Only the file and its text change; the draft being reviewed stays.
+    const reload = async () => {
+      const d = await api.getDocument(id);
+      setDoc((cur) => (cur && cur.id === id ? { ...cur, content: d.content, pageCount: d.pageCount, fileVersion: d.fileVersion, pagesEdited: d.pagesEdited } : cur));
+    };
+    toast(`Rotating page ${page}, then reading its text…`);
+    if (!(await act(() => api.editPages(id, ops(turn))))) return;
+    await reload();
+    toast(`Page ${page} rotated ${turn === 90 ? "right" : "left"}.`, "info", {
+      label: "Undo",
+      run: async () => { await api.editPages(id, ops(turn === 90 ? 270 : 90)); await reload(); },
+    });
+  };
+  const pageTools = doc && doc.hasArchive && doc.status === "inbox"
+    ? {
+      onRotatePage: rotatePage,
+      onEditPages: () => { if (discardOk("Editing the pages")) navigate(`/documents/${doc.id}?pages=edit&back=inbox`); },
+      busy,
+    }
+    : undefined;
+
   const canFile = !!doc && !!draft && FILEABLE.includes(doc.status) && !busy && !revising;
 
   const file = async () => {
@@ -501,7 +527,7 @@ export function InboxPage() {
             <button className={cx(ui.compact, styles.stepBtn)} onClick={() => step(1)} aria-label="Next document"><Icon name="down" size={16} /></button>
           </div>
           <section className={cx(styles.preview, previewOpen && styles.previewOpen)}>
-            <Preview doc={doc} highlight={locate} />
+            <Preview doc={doc} highlight={locate} pageTools={pageTools} />
             <button className={styles.previewToggle} onClick={() => setPreviewOpen((v) => !v)}>
               {previewOpen ? <><Icon name="close" size={14} /> Close</> : <><Icon name="expand" size={14} /> View page</>}
             </button>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, fileUrl } from "../api";
 import { DraftEditor } from "../components/DraftEditor";
 import { DraftView } from "../components/DraftView";
@@ -10,6 +10,11 @@ import type { DocumentDetail, Draft } from "../types";
 import ui from "../ui.module.css";
 import styles from "./DocumentPage.module.css";
 
+/** PDF.js is large, so the page editor loads only when opened. */
+const PageEditor = lazy(() => import("../components/PageEditor"));
+
+const TURN_NAME = { 90: "right", 270: "left" } as const;
+
 export function DocumentPage() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -19,6 +24,10 @@ export function DocumentPage() {
   const [tab, setTab] = useState<"preview" | "text">("preview");
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const editingPages = params.get("pages") === "edit";
+  /** Opened from the inbox: go back there when done. */
+  const backToInbox = params.get("back") === "inbox";
 
   const load = async () => {
     const d = await api.getDocument(id!);
@@ -39,6 +48,29 @@ export function DocumentPage() {
     }
   };
 
+  const canEditPages = doc.hasArchive && (doc.status === "inbox" || doc.status === "filed");
+  const closePages = () => {
+    if (backToInbox) navigate(`/inbox/${doc.id}`);
+    else setParams({}, { replace: true });
+  };
+
+  /** Quick rotate from the viewer: saves at once, with Undo. */
+  const rotatePage = async (page: number, turn: 90 | 270) => {
+    const count = doc.pageCount ?? 1;
+    const ops = (rotate: 90 | 270) => Array.from({ length: count }, (_, i) => (i + 1 === page ? { from: i + 1, rotate } : { from: i + 1 }));
+    toast(`Rotating page ${page}, then reading its text…`);
+    const ok = await act(() => api.editPages(doc.id, ops(turn)));
+    if (!ok) return;
+    await load();
+    toast(`Page ${page} rotated ${TURN_NAME[turn]}.`, "info", {
+      label: "Undo",
+      run: async () => {
+        await api.editPages(doc.id, ops(turn === 90 ? 270 : 90));
+        await load();
+      },
+    });
+  };
+
   const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
     try {
@@ -53,6 +85,26 @@ export function DocumentPage() {
     }
   };
 
+  if (editingPages && canEditPages) {
+    return (
+      <Suspense fallback={<div className={cx(ui.page, ui.muted)}>Loading pages…</div>}>
+        <PageEditor
+          doc={doc}
+          onClose={closePages}
+          onSaved={async (reanalyze) => {
+            if (reanalyze && (await act(() => api.reanalyze(doc.id), "Pages saved. Sent to the inbox for re-analysis"))) {
+              navigate(`/inbox/${doc.id}`);
+              return;
+            }
+            toast("Pages saved and the text read again.");
+            await load();
+            closePages();
+          }}
+        />
+      </Suspense>
+    );
+  }
+
   return (
     <div className={cx(styles.page, doc.mimeType.startsWith("text/") && styles.textDoc)}>
       <section className={styles.left}>
@@ -61,9 +113,14 @@ export function DocumentPage() {
           <button className={cx(ui.compact, tab === "text" && styles.tabOn)} onClick={() => setTab("text")}>Text</button>
           <span className={ui.spacer} />
           <a href={fileUrl(doc.id, "original", true)}>Original</a>
-          {doc.hasArchive && <a href={fileUrl(doc.id, "archive", true)}>Searchable PDF</a>}
+          {doc.hasArchive && <a href={fileUrl(doc.id, "archive", true, doc.fileVersion)}>Searchable PDF</a>}
         </div>
-        {tab === "preview" ? <Preview doc={doc} /> : <TextPreview text={doc.content || "(no text)"} />}
+        {tab === "preview" ? (
+          <Preview
+            doc={doc}
+            pageTools={canEditPages ? { onRotatePage: rotatePage, onEditPages: () => setParams({ pages: "edit" }), busy } : undefined}
+          />
+        ) : <TextPreview text={doc.content || "(no text)"} />}
       </section>
       <section className={styles.right}>
         <div className={cx(ui.muted, ui.small)}>
@@ -106,6 +163,15 @@ export function DocumentPage() {
                   >
                     Re-analyze
                   </button>
+                  {doc.pagesEdited && (
+                    <button
+                      disabled={busy}
+                      title="Undo every page edit: back to the pages as first read"
+                      onClick={async () => { if (await act(() => api.revertPages(doc.id), "Pages back to the original")) await load(); }}
+                    >
+                      Revert to original pages
+                    </button>
+                  )}
                   <button
                     className={ui.danger}
                     disabled={busy}

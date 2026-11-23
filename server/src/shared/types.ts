@@ -154,6 +154,10 @@ export interface DocumentDetail extends DocumentSummary {
   content: string;
   fileSize: number;
   hasArchive: boolean;
+  /** The pages were edited (rotated, cropped, removed...); "Revert to original" undoes it. */
+  pagesEdited: boolean;
+  /** Changes whenever the searchable PDF is rewritten, so viewers reload it. */
+  fileVersion: string;
   current: Draft;
   proposal: Proposal | null;
 }
@@ -213,4 +217,30 @@ export interface AskResponse {
   citations: Array<{ id: string; title: string; documentDate: string | null }>;
   /** What the assistant looked up, for transparency. */
   steps: string[];
+}
+
+/** Where a crop sits on a page, as fractions of its width and height, measured from the top left. */
+export interface CropBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * One page of the edited document: which current page it comes from and what
+ * to do to it, applied in this order: rotate, flip, straighten, crop.
+ */
+export interface PageOp {
+  /** 1-based page number in the document as it is now. */
+  from: number;
+  /** Clockwise. */
+  rotate?: 0 | 90 | 180 | 270;
+  /** Mirror left to right. */
+  flipH?: boolean;
+  /** Mirror top to bottom. */
+  flipV?: boolean;
+  /** Small clockwise turn in degrees, for crooked scans. */
+  straighten?: number;
+  crop?: CropBox | null;
 }
