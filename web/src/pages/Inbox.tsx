@@ -53,7 +53,7 @@ function changedPaths(before: Draft, after: Draft): Map<string, DraftValue> {
 export function InboxPage() {
   const { id: routeId } = useParams();
   const navigate = useNavigate();
-  const { catalog, objects, refresh, toast, status } = useAppData();
+  const { catalog, objects, refresh, toast, status, docsVersion, live } = useAppData();
   const [items, setItems] = useState<DocumentSummary[]>([]);
   const [doc, setDoc] = useState<DocumentDetail | null>(null);
   const [draft, setDraftState] = useState<Draft | null>(null);
@@ -102,21 +102,30 @@ export function InboxPage() {
     return res.items;
   }, []);
 
-  // Poll while something is being processed.
+  // The server pushes an event when a document is consumed, processed or filed
+  // (see data.tsx); reload the list each time.
   useEffect(() => {
+    loadList().catch((e) => toast((e as Error).message, "error"));
+  }, [docsVersion, loadList, toast]);
+
+  // Fallback while the live stream is down (server restarting, a proxy that
+  // won't pass it): poll, quickly while something is being processed. A failed
+  // load is retried rather than ending the polling.
+  useEffect(() => {
+    if (live) return;
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      let delay = 15000;
       try {
         const list = await loadList();
-        if (!stop) timer = setTimeout(tick, list.some((i) => ACTIVE.includes(i.status)) ? 2500 : 15000);
-      } catch (e) {
-        toast((e as Error).message, "error");
-      }
+        if (list.some((i) => ACTIVE.includes(i.status))) delay = 2500;
+      } catch { /* the stream or the next tick will catch up */ }
+      if (!stop) timer = setTimeout(tick, delay);
     };
-    void tick();
+    timer = setTimeout(tick, 2500);
     return () => { stop = true; clearTimeout(timer); };
-  }, [loadList, toast]);
+  }, [live, loadList]);
 
   // Closing the tab with unfiled edits asks first.
   useEffect(() => {
