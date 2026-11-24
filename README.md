@@ -47,6 +47,17 @@ A page that came out sideways, mirrored, crooked or blank can be fixed in the do
 - **Edit pages** in the viewer toolbar opens a grid of the pages: rotate, flip left to right or top to bottom, crop and straighten (with **Detect edges** for photos of paper on a desk), remove pages, or drag them into a new order. Every pending change is listed with its own Undo, and nothing is written until **Save**. Keys: `R` / `Shift+R` rotate, `H` / `V` flip, `C` crop, `Delete` remove, `Ctrl+Z` undo.
 
 Saving rebuilds the searchable PDF from the original upload plus the full list of edits, then runs OCR on it again (without `--rotate-pages`, since you chose the rotation), so edits never stack up losses. Born-digital pages keep their vector text; photos are re-rendered from the first searchable PDF. The original upload is never changed, the first searchable PDF is kept as `archive/<id>.base.pdf` while edits exist, and **Revert to original pages** in the ⋯ menu puts it back. The filed title and details aren't touched. Re-analyzing with OCR from the original drops the page edits. API: `PUT /api/documents/:id/pages` and `POST /api/documents/:id/pages/revert`.
+## Merging documents
+
+When the sheets of one document have to be scanned separately (an invoice and its debit receipt, which don't go through the feeder together), merge them in the inbox:
+
+- **Merge with…** in the review's ⋯ menu (or `M`) lists the other inbox documents, closest scan time first, with a matching amount marked. Tick the ones that belong to this document.
+- When another document came in within 5 minutes of the one you're reviewing, the review asks "Scanned 1 min before …: part of this document?" with **Merge…** and **Not related**.
+- Ticking several documents in *Ready* shows **Merge N** next to **File N…**; they merge into the one scanned first.
+- Pages start in scan order. Drag pages, or select one and use the arrows (← →), to reorder; the Order list moves whole documents. **Scan order** puts them back.
+
+Merging keeps the document you started from. Its searchable PDF becomes the chosen pages of every part's searchable PDF, page edits included, so nothing is OCRed again; its text and search are updated and the AI reads it again. The other documents go to the trash marked as merged, and **Undo** (on the toast, or **Split back into N documents** in the ⋯ menu while they're still in the trash) puts every document back as it was. The original uploads are never changed: on the document page, **Original** lists each one, plus a PDF of all the pages as merged, which is what **Edit pages** and **Redo OCR** work from. Only documents that have been read and are in the inbox can be merged. API: `POST /api/documents/:id/merge` with `{ pages: [{ id, page }] }` (every page of each document, once) and `POST /api/documents/:id/unmerge`.
+
 ## On your phone
 
 Docket works in a phone's browser: the navigation moves to a bottom tab bar (with + for Scan and Upload), the inbox and document pages stack, and search filters fold behind a **Filters** button. PDFs are drawn with PDF.js, since mobile browsers don't show a PDF inside a page.

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, thumbUrl } from "../api";
 import { ComponentDots } from "../components/Chip";
 import { defsFor, display, DraftEditor, rankMatches, type ValueMark } from "../components/DraftEditor";
 import { DateInput, quietClass } from "../components/FieldInputs";
 import { Icon } from "../components/Icon";
+import { scanGap, type MergeDoc, type MergePageRef } from "../components/mergeGap";
 import { Preview, STATUS_LABEL } from "../components/Preview";
 import { cx } from "../cx";
 import { useAppData } from "../data";
@@ -13,6 +14,19 @@ import { provenance } from "../provenance";
 import ui from "../ui.module.css";
 import styles from "./Inbox.module.css";
 import type { ComponentDef, DocumentDetail, DocumentSummary, Draft, DraftValue, ObjectDetail, ObjectSummary } from "../types";
+
+/** PDF.js is large: the merge view loads it only when opened. */
+const MergeView = lazy(() => import("../components/MergeView"));
+
+/** Another inbox document scanned this close to one is offered as part of it. */
+const SUGGEST_MINUTES = 5;
+const DISMISSED_KEY = "docket.mergeDismissed";
+function loadDismissed(): Set<string> {
+  try { return new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? "[]") as string[]); } catch { return new Set(); }
+}
+const pairKey = (a: string, b: string) => [a, b].sort().join(":");
+/** "1 min later" (the other one's time) -> "1 min before" (this one, relative to the other). */
+const relativeTo = (gap: string) => (gap === "within a minute" ? "within a minute of" : gap.replace(/ later$/, " before").replace(/ earlier$/, " after"));
 
 /** Documents that can be filed: reviewed proposals, and failed ones filed by hand. */
 const FILEABLE = ["inbox", "failed"];
@@ -75,6 +89,12 @@ export function InboxPage() {
   const revised = useRef(new Map<string, Map<string, DraftValue>>());
   /** "No, create a new one" answers to look-alike questions, as "docId:tempId". */
   const dismissed = useRef(new Set<string>());
+  /** Merge with…: the document merged into and the others ticked to begin with. */
+  const [merging, setMerging] = useState<{ into: string; initial: string[] } | null>(null);
+  /** "Not related" answers to merge suggestions, as sorted id pairs. */
+  const notRelated = useRef(loadDismissed());
+  /** Bumped to reload the open document when its file changed without a status change (a merge undone). */
+  const [reloadKey, setReloadKey] = useState(0);
   const [, setVersion] = useState(0);
   const bump = () => setVersion((v) => v + 1);
 
@@ -169,7 +189,7 @@ export function InboxPage() {
       setDraftState(structuredClone(kept ?? baseline(d)));
     }).catch((e) => toast(e.message, "error"));
     return () => { cancelled = true; };
-  }, [selectedId, selectedStatus, toast]);
+  }, [selectedId, selectedStatus, reloadKey, toast]);
 
   // A half-written suggestion, a highlight and an open preview belong to the document they were for.
   useEffect(() => { setFeedback(""); setLocate(null); setPreviewOpen(false); setAsking(false); }, [selectedId]);
@@ -309,6 +329,85 @@ export function InboxPage() {
     }
   };
 
+  // ---- merging ----------------------------------------------------------------
+  const titleOf = (i: DocumentSummary) => edits.current.get(i.id)?.title || i.proposed?.title || i.title;
+  /** Documents that can take part in a merge: read, in the inbox, with pages. */
+  const mergeable = items.filter((i) => i.status === "inbox" && (i.pageCount ?? 0) > 0);
+  const sameAmount = (a: string, b: string) => {
+    const x = triaged.get(a)?.amount;
+    return !!x && x === triaged.get(b)?.amount;
+  };
+  /** Others scanned within a few minutes of this one, likeliest first; not ones answered "Not related". */
+  const suggestionsFor = (id: string) => {
+    const me = mergeable.find((i) => i.id === id);
+    if (!me) return [];
+    return mergeable
+      .filter((i) => i.id !== id && !notRelated.current.has(pairKey(id, i.id)) && scanGap(me.addedAt, i.addedAt).minutes <= SUGGEST_MINUTES)
+      .sort((a, b) => Number(sameAmount(id, b.id)) - Number(sameAmount(id, a.id)) || scanGap(me.addedAt, a.addedAt).minutes - scanGap(me.addedAt, b.addedAt).minutes);
+  };
+  const openMerge = (into: string, initial: string[]) => {
+    if (into === doc?.id && !discardOk("Merging")) return;
+    setConfirming(false);
+    setMerging({ into, initial });
+  };
+  const mergeDocs = (into: string): MergeDoc[] => {
+    const me = items.find((i) => i.id === into);
+    if (!me) return [];
+    return [me, ...mergeable.filter((i) => i.id !== into)
+      .sort((a, b) => Number(sameAmount(into, b.id)) - Number(sameAmount(into, a.id)) || scanGap(me.addedAt, a.addedAt).minutes - scanGap(me.addedAt, b.addedAt).minutes)]
+      .map((i) => {
+        const t = triaged.get(i.id);
+        return { id: i.id, title: titleOf(i), addedAt: i.addedAt, pageCount: i.pageCount ?? 1, sub: [t?.who, t?.amount].filter(Boolean).join(" · ") || undefined };
+      });
+  };
+  const mergeReason = (into: string, id: string) => {
+    const a = items.find((i) => i.id === into);
+    const b = items.find((i) => i.id === id);
+    if (!a || !b) return { text: "", strong: false };
+    const gap = scanGap(a.addedAt, b.addedAt);
+    const amount = sameAmount(into, id) ? ` · same amount ${triaged.get(id)!.amount}` : "";
+    const close = gap.minutes <= SUGGEST_MINUTES;
+    return { text: `${close ? "Scanned " : "Uploaded "}${gap.text}${amount}`, strong: close || !!amount };
+  };
+  const runMerge = async (pages: MergePageRef[]) => {
+    if (!merging) return;
+    const into = merging.into;
+    const ids = [...new Set(pages.map((p) => p.id))];
+    setBusy(true);
+    try {
+      await api.mergeDocuments(into, pages);
+    } catch (e) {
+      toast((e as Error).message, "error");
+      setBusy(false);
+      return;
+    }
+    // Close the merge view before the list reloads without the merged documents.
+    setMerging(null);
+    ids.forEach(forget);
+    setPicked(new Set());
+    navigate(`/inbox/${into}`);
+    setReloadKey((k) => k + 1);
+    await Promise.all([loadList(), refresh()]).catch(() => {});
+    setBusy(false);
+    toast(`Merged ${ids.length} documents${status?.ai ? "; the AI is reading it again" : ""}`, "info", {
+      label: "Undo",
+      run: async () => {
+        await api.unmergeDocument(into);
+        await Promise.all([loadList(), refresh()]);
+        setReloadKey((k) => k + 1);
+        navigate(`/inbox/${into}`);
+      },
+    });
+  };
+  const unmerge = async () => {
+    if (!doc || !discardOk("Splitting")) return;
+    const id = doc.id;
+    if (await act(() => api.unmergeDocument(id), "Split back into the documents it was merged from")) {
+      forget(id);
+      setReloadKey((k) => k + 1);
+    }
+  };
+
   // Keyboard: J/K move through the inbox, Ctrl/⌘+Enter files.
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e) => {
@@ -318,7 +417,9 @@ export function InboxPage() {
       return;
     }
     if (isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (merging) return;
     if (e.key === "j") step(1);
+    else if (e.key === "m" && doc?.status === "inbox" && doc.hasArchive) openMerge(doc.id, []);
     else if (e.key === "k") step(-1);
   };
   useEffect(() => {
@@ -449,6 +550,7 @@ export function InboxPage() {
     : [];
 
   const pickedItems = items.filter((i) => picked.has(i.id));
+  const suggestion = doc && doc.status === "inbox" && !merging ? suggestionsFor(doc.id)[0] : undefined;
 
   return (
     <div className={cx(styles.page, routeId && styles.pageOpen, confirming && picked.size > 0 && styles.pageConfirming)}>
@@ -463,6 +565,20 @@ export function InboxPage() {
                 picked.size ? (
                   <>
                     <button className={cx(ui.link, ui.small, styles.groupAction)} onClick={() => setPicked(new Set())}>Clear</button>
+                    {picked.size > 1 && (
+                      <button
+                        className={cx(ui.compact, styles.groupAction)}
+                        title="Merge the ticked documents into one"
+                        onClick={() => {
+                          // Into the one scanned first; the rest follow in scan order.
+                          const ids = pickedItems.filter((i) => i.status === "inbox" && i.pageCount).sort((a, b) => a.addedAt.localeCompare(b.addedAt)).map((i) => i.id);
+                          if (ids.length < 2) return toast("Only documents that have been read can be merged.", "error");
+                          openMerge(ids[0], ids.slice(1));
+                        }}
+                      >
+                        Merge {picked.size}
+                      </button>
+                    )}
                     <button className={cx(ui.compact, ui.primary, styles.groupAction)} onClick={() => setConfirming(true)}>File {picked.size}…</button>
                   </>
                 ) : (
@@ -489,12 +605,13 @@ export function InboxPage() {
                   <button className={styles.rowMain} onClick={() => { setConfirming(false); navigate(`/inbox/${i.id}`); }}>
                     <span className={styles.rowTitle}>{d?.title || p?.title || i.title}</span>
                     <span className={styles.rowDate}>{g.id === "processing" ? "now" : shortDate(d?.documentDate ?? i.documentDate)}</span>
-                    {(t.who || t.amount || d?.components.length) ? (
+                    {(t.who || t.amount || d?.components.length || i.parts) ? (
                       <span className={styles.rowSub}>
                         {d && <ComponentDots keys={d.components.map((c) => c.component)} catalog={catalog} />}
                         {t.who && <span className={styles.ellipsis}>{t.who}</span>}
                         {t.who && t.amount && <span className={ui.muted}>·</span>}
                         {t.amount && <b className={styles.amount}>{t.amount}</b>}
+                        {!!i.parts && <span className={styles.partsTag}>{i.parts} parts · {i.pageCount} pages</span>}
                       </span>
                     ) : null}
                     <RowStatus doc={i} t={t} edited={edits.current.has(i.id)} />
@@ -506,7 +623,21 @@ export function InboxPage() {
         ))}
       </aside>
 
-      {confirming && picked.size > 0 ? (
+      {merging ? (
+        <Suspense fallback={<section className={cx(styles.preview, styles.previewEmpty)}>Loading…</section>}>
+          <MergeView
+            key={merging.into}
+            into={merging.into}
+            docs={mergeDocs(merging.into)}
+            initial={merging.initial}
+            reason={(id) => mergeReason(merging.into, id)}
+            ai={!!status?.ai}
+            busy={busy}
+            onCancel={() => setMerging(null)}
+            onMerge={runMerge}
+          />
+        </Suspense>
+      ) : confirming && picked.size > 0 ? (
         <BatchPanel
           items={pickedItems}
           drafts={(id) => edits.current.get(id) ?? items.find((i) => i.id === id)?.proposed?.draft}
@@ -561,7 +692,7 @@ export function InboxPage() {
                       </span>
                       <span>·</span>
                       <span>{doc.proposal ? <>Proposed by AI <span className={ui.muted}>({doc.proposal.model})</span></> : "No AI proposal"}</span>
-                      <span className={styles.metaFile} title={doc.originalFilename}>· {doc.originalFilename}</span>
+                      <span className={styles.metaFile} title={doc.originalFilename}>· {doc.mergeParts ? doc.mergeParts.map((p) => p.filename).join(" + ") : doc.originalFilename}</span>
                     </div>
                   </header>
 
@@ -582,6 +713,30 @@ export function InboxPage() {
                           <button className={ui.compact} disabled={busy} onClick={() => reanalyze(false)}>Run AI now</button>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {doc.status === "inbox" && suggestion && (
+                    <div className={styles.suggest}>
+                      {suggestion.hasThumb ? <img className={styles.suggestThumb} src={thumbUrl(suggestion.id)} alt="" /> : <span />}
+                      <div className={styles.suggestText}>
+                        <b>Scanned {relativeTo(scanGap(doc.addedAt, suggestion.addedAt).text)} “{titleOf(suggestion)}”</b>
+                        <span className={ui.small}>{sameAmount(doc.id, suggestion.id) ? `Same amount, ${triaged.get(doc.id)!.amount}. ` : ""}Part of this document?</span>
+                      </div>
+                      <div className={styles.suggestActions}>
+                        <button className={cx(ui.primary, ui.compact)} onClick={() => openMerge(doc.id, [suggestion.id])}>Merge…</button>
+                        <button
+                          className={cx(ui.compact, ui.ghost)}
+                          title="Not related"
+                          onClick={() => {
+                            notRelated.current.add(pairKey(doc.id, suggestion.id));
+                            try { localStorage.setItem(DISMISSED_KEY, JSON.stringify([...notRelated.current].slice(-200))); } catch { /* remembered for this visit */ }
+                            bump();
+                          }}
+                        >
+                          Not related
+                        </button>
+                      </div>
                     </div>
                   )}
 
@@ -673,6 +828,12 @@ export function InboxPage() {
                     <MoreMenu>
                       {status?.ai && <button disabled={busy} onClick={() => reanalyze(false)}>Re-run AI</button>}
                       <button disabled={busy} onClick={() => reanalyze(true)}>Redo OCR</button>
+                      {doc.status === "inbox" && doc.hasArchive && (
+                        <button disabled={busy} onClick={() => openMerge(doc.id, [])}>Merge with… <kbd className={styles.keysHint}>M</kbd></button>
+                      )}
+                      {doc.splitsInto > 1 && (
+                        <button disabled={busy} onClick={unmerge}>Split back into {doc.splitsInto} documents</button>
+                      )}
                       <hr />
                       <button className={ui.danger} disabled={busy} onClick={remove}>Move to trash</button>
                     </MoreMenu>

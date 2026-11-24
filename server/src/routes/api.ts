@@ -10,12 +10,13 @@ import { createComponent, deleteComponent, listComponents, updateComponent } fro
 import { applyDraft, describeComponents, loadComponents, loadDraft, refTitles } from "../services/entities.ts";
 import { deleteDocument, ingestBuffer, purgeTrash, restoreDocument, trashDocument } from "../services/ingest.ts";
 import { editPages, revertPages } from "../services/pages.ts";
+import { MAX_MERGE, mergeDocuments, unmergeDocument } from "../services/merge.ts";
 import { findDuplicates, mergeObjects, reconcileDraft } from "../services/objects.ts";
 import { aggregateDocuments, searchDocuments, type SearchParams } from "../services/search.ts";
 import { askQuestion, interpretQuestion } from "../services/ai-query.ts";
 import { refreshTitleChunk, retrySemantic, semanticStatus } from "../services/embeddings.ts";
 import { isUuid } from "../services/values.ts";
-import type { DocumentDetail, DocumentStatus, DraftValue, ObjectDetail, ObjectSummary, Proposal } from "../shared/types.ts";
+import type { DocumentDetail, DocumentStatus, DraftValue, MergePart, ObjectDetail, ObjectSummary, Proposal } from "../shared/types.ts";
 import { ComponentInputSchema, DraftSchema, PageOpSchema } from "./schemas.ts";
 
 const IdParams = z.object({ id: z.string().refine(isUuid, "invalid id") });
@@ -123,7 +124,12 @@ export async function apiRoutes(app: FastifyInstance) {
       select e.id, e.title, d.status, d.original_filename, d.mime_type, d.document_date, d.added_at, d.page_count,
              d.thumb_path is not null as has_thumb, d.archive_path is not null as has_archive, d.error,
              d.content, d.file_size, d.proposal, d.page_edits is not null as pages_edited,
-             coalesce(extract(epoch from d.pages_edited_at)::text, '0') as file_version
+             coalesce(extract(epoch from d.pages_edited_at)::text, '0') as file_version, d.merge_parts,
+             case when d.premerge is not null and not exists (
+               select 1 from jsonb_array_elements_text(d.premerge->'sources') s(id)
+               left join document src on src.entity_id = s.id::uuid
+               where src.entity_id is null or src.status <> 'trashed' or src.merged_into is distinct from d.entity_id
+             ) then jsonb_array_length(d.premerge->'sources') + 1 else 0 end as splits_into
       from document d join entity e on e.id = d.entity_id where e.id = ${id}`;
     if (!d) throw new HttpError(404, "Document not found.");
     const current = await loadDraft(sql, id);
@@ -153,7 +159,21 @@ export async function apiRoutes(app: FastifyInstance) {
       components: current.components.map((c) => c.component),
       current,
       proposal,
+      mergeParts: (d.merge_parts as MergePart[] | null)?.map((p) => ({ id: p.id, filename: p.filename, pages: p.pages })) ?? null,
+      splitsInto: d.splits_into,
     };
+  });
+
+  /** One upload of a merged document, as it was uploaded. */
+  app.get("/api/documents/:id/parts/:n/file", async (req, reply) => {
+    const { id } = IdParams.parse(req.params);
+    const n = Number((req.params as { n: string }).n);
+    const [d] = await sql<{ merge_parts: MergePart[] | null }[]>`select merge_parts from document where entity_id = ${id}`;
+    const part = d?.merge_parts?.[n];
+    if (!part) throw new HttpError(404, "No such part.");
+    reply.header("content-type", part.mimeType);
+    reply.header("content-disposition", `inline; filename*=UTF-8''${encodeURIComponent(part.filename)}`);
+    return reply.send(fs.createReadStream(path.join(config.dataDir, part.originalPath)));
   });
 
   app.get("/api/documents/:id/file", async (req, reply) => {
@@ -247,6 +267,26 @@ export async function apiRoutes(app: FastifyInstance) {
     const { id } = IdParams.parse(req.params);
     await revertPages(id);
     return { ok: true };
+  });
+
+  /**
+   * Merges inbox documents into this one, in the given page order (every page
+   * of every document, once). The others go to the trash; the AI reads the
+   * result again.
+   */
+  app.post("/api/documents/:id/merge", async (req) => {
+    const { id } = IdParams.parse(req.params);
+    const { pages } = z.object({
+      pages: z.array(z.object({ id: z.string().refine(isUuid, "invalid id"), page: z.number().int().min(1) })).min(2).max(MAX_MERGE * 500),
+    }).parse(req.body);
+    await mergeDocuments(id, pages);
+    return { ok: true };
+  });
+
+  /** Undoes the document's latest merge. */
+  app.post("/api/documents/:id/unmerge", async (req) => {
+    const { id } = IdParams.parse(req.params);
+    return unmergeDocument(id);
   });
 
   /** Moves the document to the trash; with ?forever=1 deletes it and its files now. */

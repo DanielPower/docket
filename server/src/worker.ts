@@ -74,12 +74,13 @@ async function processJob(job: Job, log: (m: string) => void): Promise<void> {
   // AI problems never block a document: it lands in the inbox either way.
   let proposalError: string | null = null;
   if (aiAvailable()) {
-    await sql`update document set status = 'analyzing', locked_at = now() where entity_id = ${id}`;
+    // Only if nothing else changed it meanwhile (a merge undone, say).
+    await sql`update document set status = 'analyzing', locked_at = now() where entity_id = ${id} and status = 'ocr'`;
     // The text is ready: embed it for semantic search while the AI works.
     kickEmbeddings();
     try {
       const proposal = await analyzeDocument(id);
-      await sql`update document set proposal = ${sql.json(proposal as never)} where entity_id = ${id}`;
+      await sql`update document set proposal = ${sql.json(proposal as never)} where entity_id = ${id} and status = 'analyzing'`;
     } catch (err) {
       proposalError = `AI analysis failed: ${(err as Error).message}`;
       log(`${proposalError} (${id})`);
@@ -87,7 +88,7 @@ async function processJob(job: Job, log: (m: string) => void): Promise<void> {
   } else {
     proposalError = config.ai.enabled ? "AI is not configured (set ANTHROPIC_API_KEY)." : null;
   }
-  await sql`update document set status = 'inbox', locked_at = null, attempts = 0, error = ${proposalError} where entity_id = ${id}`;
+  await sql`update document set status = 'inbox', locked_at = null, attempts = 0, error = ${proposalError} where entity_id = ${id} and status in ('ocr', 'analyzing')`;
   // Also covers documents that skipped the AI step.
   kickEmbeddings();
   log(`document ${id} ready in inbox`);

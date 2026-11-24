@@ -21,3 +21,4 @@
 }
 .head { display: flex; align-items: flex-start; gap: 8px; }
 .title { margin: 0 0 2px; font-size: 18px; }
+.originalMenu { color: var(--accent); cursor: pointer; font-size: 12px; margin-left: 10px; }

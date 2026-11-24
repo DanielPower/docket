@@ -23,6 +23,9 @@ const PATHS: Record<string, string> = {
   undo: "M7 4 3.5 7.5 7 11M3.5 7.5H12a4 4 0 0 1 0 8H8.5",
   detect: "M3 7V3h4M13 3h4v4M17 13v4h-4M7 17H3v-4M7 13l1.8-6h2.4L13 13M7.8 10.8h4.4",
   more: "M5 10h.01M10 10h.01M15 10h.01",
+  back: "M12.5 4.5 7 10l5.5 5.5",
+  lock: "M5 9h10v8H5zM7.5 9V6.5a2.5 2.5 0 0 1 5 0V9",
+  merge: "M5 2.5v3.5a4 4 0 0 0 4 4h2a4 4 0 0 0 4-4V2.5M10 10v7.5M7 14.5l3 3 3-3",
 };
 
 export function Icon({ name, size = 18 }: { name: keyof typeof PATHS | string; size?: number }) {

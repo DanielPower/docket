@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, fileUrl } from "../api";
+import { api, fileUrl, partUrl } from "../api";
 import { DraftEditor } from "../components/DraftEditor";
 import { DraftView } from "../components/DraftView";
 import { Preview, STATUS_LABEL, TextPreview } from "../components/Preview";
@@ -112,7 +112,15 @@ export function DocumentPage() {
           <button className={cx(ui.compact, tab === "preview" && styles.tabOn)} onClick={() => setTab("preview")}>Page</button>
           <button className={cx(ui.compact, tab === "text" && styles.tabOn)} onClick={() => setTab("text")}>Text</button>
           <span className={ui.spacer} />
-          <a href={fileUrl(doc.id, "original", true)}>Original</a>
+          {doc.mergeParts ? (
+            <details className={ui.menuWrap}>
+              <summary className={styles.originalMenu}>Original ({doc.mergeParts.length}) ▾</summary>
+              <div className={ui.menu}>
+                <a href={fileUrl(doc.id, "original", true)}>All pages, as merged</a>
+                {doc.mergeParts.map((p, n) => <a key={n} href={partUrl(doc.id, n)} target="_blank" rel="noreferrer">{p.filename} · {p.pages} page{p.pages === 1 ? "" : "s"}</a>)}
+              </div>
+            </details>
+          ) : <a href={fileUrl(doc.id, "original", true)}>Original</a>}
           {doc.hasArchive && <a href={fileUrl(doc.id, "archive", true, doc.fileVersion)}>Searchable PDF</a>}
         </div>
         {tab === "preview" ? (

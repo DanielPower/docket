@@ -144,6 +144,10 @@ export interface DocumentSummary {
   /** Why a text search matched: the words, the meaning (embeddings), or both. */
   match?: "text" | "meaning" | "both";
   error: string | null;
+  /** How many uploads the document was merged from; null if it wasn't merged. */
+  parts?: number | null;
+  /** For a document in the trash because it was merged into another: that document's title. */
+  mergedInto?: string | null;
   /** For inbox documents with an AI proposal: what the proposal would file it as. */
   proposed?: { title: string; documentDate: string | null; components: string[]; draft: Draft };
   /** The document's components with their values; only when asked for (`values=1`). */
@@ -160,6 +164,22 @@ export interface DocumentDetail extends DocumentSummary {
   fileVersion: string;
   current: Draft;
   proposal: Proposal | null;
+  /** The uploads a merged document is made of, in page order. Null if it wasn't merged. */
+  mergeParts: Array<{ id: string; filename: string; pages: number }> | null;
+  /** How many documents undoing its latest merge would give back (0 if it can't be undone: never merged, or the others left the trash). */
+  splitsInto: number;
+}
+
+/** One upload of a merged document. */
+export interface MergePart {
+  /** The document it came in as (in the trash once merged, and gone once purged; the file is kept). */
+  id: string;
+  filename: string;
+  mimeType: string;
+  /** Relative to the data directory. */
+  originalPath: string;
+  /** Its pages at the time of the merge. */
+  pages: number;
 }
 
 export interface ObjectSummary {

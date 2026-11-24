@@ -65,6 +65,8 @@ const SUMMARY_COLUMNS = sql`
   e.id, e.title, d.status, d.original_filename as "originalFilename", d.mime_type as "mimeType",
   d.document_date as "documentDate", d.added_at as "addedAt", d.page_count as "pageCount",
   d.thumb_path is not null as "hasThumb", d.error,
+  jsonb_array_length(d.merge_parts) as "parts",
+  (select m.title from entity m where m.id = d.merged_into) as "mergedInto",
   (select array_agg(cd.key order by ci.position) from component_instance ci join component_def cd on cd.id = ci.component_id
     where ci.entity_id = e.id) as components,
   case when d.status = 'inbox' and d.proposal is not null then jsonb_build_object(

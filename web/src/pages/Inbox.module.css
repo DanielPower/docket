@@ -141,3 +141,15 @@
 @media (pointer: coarse) {
   .keysHint { display: none; }
 }
+
+/* "Scanned 1 min before …: part of this document?" */
+.suggest { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: var(--accent-soft); border-radius: 8px; padding: 8px 10px; }
+.suggestThumb { width: 32px; height: 40px; object-fit: contain; object-position: top; background: var(--panel); border-radius: 2px; box-shadow: 0 1px 2px rgb(0 0 0 / .25); }
+.suggestText { display: flex; flex-direction: column; min-width: 0; color: var(--text-2); }
+.suggestText b { color: var(--text); }
+.suggestActions { display: flex; gap: 4px; }
+.partsTag { font: 600 10.5px/16px var(--font-mono); color: var(--change); background: var(--change-soft); border-radius: 3px; padding: 0 5px; }
+@media (max-width: 700px) {
+  .suggest { grid-template-columns: 32px minmax(0, 1fr); align-items: start; }
+  .suggestActions { grid-column: 2; }
+}

@@ -25,7 +25,8 @@ interface DocRow {
   page_edits: PageTransform[] | null;
 }
 
-const busy = new Set<string>();
+/** Documents whose files are being rewritten (page edits, merges). */
+export const busy = new Set<string>();
 
 export const basePath = (id: string) => path.join("archive", `${id}.base.pdf`);
 

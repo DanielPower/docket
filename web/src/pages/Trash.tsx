@@ -52,7 +52,7 @@ export function TrashPage() {
             {d.hasThumb ? <img className={styles.thumb} src={thumbUrl(d.id)} alt="" /> : <div className={cx(ui.thumbPlaceholder, styles.fixed)}>{d.mimeType.split("/")[1]}</div>}
             <div>
               <div className={ui.listTitle}>{d.title}</div>
-              <div className={cx(ui.muted, ui.small)}>{d.documentDate ?? "no date"} · {d.originalFilename}</div>
+              <div className={cx(ui.muted, ui.small)}>{d.documentDate ?? "no date"} · {d.originalFilename}{d.mergedInto && <> · merged into “{d.mergedInto}”</>}</div>
             </div>
             <button disabled={busy} onClick={() => run(() => api.restoreDocument(d.id), `Restored “${d.title}”`)}>Restore</button>
             <button
