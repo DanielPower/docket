@@ -102,6 +102,10 @@ export const api = {
   /** Rewrites the pages (rotate, flip, crop, reorder, remove) and reads the text again. */
   editPages: (id: string, pages: PageOp[]) => request<{ ok: true }>("PUT", `/api/documents/${id}/pages`, { pages }),
   revertPages: (id: string) => request<{ ok: true }>("POST", `/api/documents/${id}/pages/revert`),
+  /** Merges inbox documents into `id`, in this page order (every page of each, once). */
+  mergeDocuments: (id: string, pages: Array<{ id: string; page: number }>) => request<{ ok: true }>("POST", `/api/documents/${id}/merge`, { pages }),
+  /** Undoes the latest merge: the merged documents come back as they were. */
+  unmergeDocument: (id: string) => request<{ restored: string[] }>("POST", `/api/documents/${id}/unmerge`),
   reanalyze: (id: string, ocr = false) => request<{ ok: true }>("POST", `/api/documents/${id}/reanalyze`, { ocr }),
   /** To the trash; `forever` deletes the document and its files now. */
   deleteDocument: (id: string, forever = false) => request<{ ok: true }>("DELETE", `/api/documents/${id}${forever ? "?forever=1" : ""}`),
@@ -133,4 +137,6 @@ export const api = {
 /** `version` (DocumentDetail.fileVersion) makes a new URL whenever page edits rewrite the PDF. */
 export const fileUrl = (id: string, kind: "archive" | "original" = "archive", download = false, version?: string) =>
   `/api/documents/${id}/file?kind=${kind}${download ? "&download=1" : ""}${version ? `&v=${version}` : ""}`;
+/** One upload of a merged document (DocumentDetail.mergeParts, by index). */
+export const partUrl = (id: string, n: number) => `/api/documents/${id}/parts/${n}/file`;
 export const thumbUrl = (id: string) => `/api/documents/${id}/thumb`;

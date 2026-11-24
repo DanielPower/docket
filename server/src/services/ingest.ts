@@ -5,7 +5,9 @@ import { config } from "../config.ts";
 import { sql } from "../db.ts";
 import { HttpError } from "../errors.ts";
 import { looksComplete } from "./fileComplete.ts";
+import { fileInUse, mergeFiles, type Premerge } from "./merge.ts";
 import { basePath } from "./pages.ts";
+import type { MergePart } from "../shared/types.ts";
 
 const EXT_BY_MIME: Record<string, string> = {
   "application/pdf": ".pdf",
@@ -92,7 +94,7 @@ export async function trashDocument(id: string): Promise<void> {
 /** Brings a document back from the trash to where it was (inbox or filed). */
 export async function restoreDocument(id: string): Promise<void> {
   const [d] = await sql`
-    update document set status = coalesce(trashed_from, 'inbox'), trashed_at = null, trashed_from = null
+    update document set status = coalesce(trashed_from, 'inbox'), trashed_at = null, trashed_from = null, merged_into = null
     where entity_id = ${id} and status = 'trashed' returning entity_id`;
   if (!d) throw new HttpError(404, "That document isn't in the trash.");
 }
@@ -106,14 +108,17 @@ export async function purgeTrash(all = false): Promise<number> {
   return rows.length;
 }
 
-/** Deletes a document and its files for good. */
+/** Deletes a document and its files for good. Uploads another document still uses (as a part of a merge) are kept. */
 export async function deleteDocument(id: string): Promise<void> {
-  const [doc] = await sql<{ original_path: string; archive_path: string | null; thumb_path: string | null }[]>`
-    select original_path, archive_path, thumb_path from document where entity_id = ${id}`;
+  const [doc] = await sql<{ original_path: string; archive_path: string | null; thumb_path: string | null; merge_parts: MergePart[] | null; premerge: Premerge | null }[]>`
+    select original_path, archive_path, thumb_path, merge_parts, premerge from document where entity_id = ${id}`;
   if (!doc) throw new HttpError(404, "Document not found.");
   await sql`delete from entity where id = ${id}`;
-  for (const p of [doc.original_path, doc.archive_path, doc.thumb_path, basePath(id)]) {
+  for (const p of [doc.archive_path, doc.thumb_path, basePath(id)]) {
     if (p) await fs.rm(path.join(config.dataDir, p), { force: true });
+  }
+  for (const p of new Set([doc.original_path, ...mergeFiles(id, doc.merge_parts, doc.premerge)])) {
+    if (!(await fileInUse(p))) await fs.rm(path.join(config.dataDir, p), { force: true });
   }
 }
 
