@@ -1,4 +1,6 @@
 .toasts { position: fixed; bottom: 16px; right: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 30; }
+/* Toasts are click-through so they never block the buttons beneath them; only a toast's own action button takes clicks. */
+.toasts, .toast { pointer-events: none; }
 .toast { background: var(--text); color: var(--bg); padding: 10px 14px; border-radius: var(--radius); max-width: 420px; white-space: pre-wrap; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
 .toastError { background: var(--danger); color: white; }
 @media (max-width: 700px) {
